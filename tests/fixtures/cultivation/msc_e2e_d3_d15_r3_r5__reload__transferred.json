@@ -1,0 +1,80 @@
+{
+  "circuit": "msc_e2e_d3_d15_r3_r5",
+  "reload": true,
+  "verdict": "contextual",
+  "method": "transferred-stage12-witness",
+  "placement": "2q",
+  "include_noiseless": false,
+  "max_losses": null,
+  "witness": [
+    [
+      {},
+      [
+        2,
+        4,
+        7,
+        11
+      ],
+      0
+    ],
+    [
+      {
+        "461": [
+          11
+        ],
+        "465": [
+          13,
+          19
+        ],
+        "469": [
+          30
+        ],
+        "479": [
+          6
+        ],
+        "483": [
+          4,
+          7
+        ],
+        "488": [
+          6
+        ],
+        "500": [
+          11,
+          14
+        ],
+        "502": [
+          30
+        ],
+        "522": [
+          5
+        ],
+        "532": [
+          20
+        ],
+        "534": [
+          13
+        ],
+        "536": [
+          1,
+          18,
+          29
+        ]
+      },
+      [
+        2,
+        4,
+        7,
+        11
+      ],
+      1
+    ]
+  ],
+  "witness_verified_shots": 128,
+  "witness_flow_verified": true,
+  "source_certificate": "results/cultivation/prefix/msc_stage12_d3_prefix__reload.json",
+  "source_circuit": "data/cultivation/msc_stage12_d3_prefix.stim",
+  "source_sha256": "0e103fe5b3ac3f6c9a3da2533cc99616b98adcfd23513ea328c0e424b0d84143",
+  "target_sha256": "667e2540f73b8a334aea3d0a0d7350dc6791094532253fb7a1745bcf68ea2de7",
+  "matched_physical_2q_prefix_pairs": 81
+}

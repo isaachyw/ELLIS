@@ -1,0 +1,146 @@
+{
+  "circuit": "msc_e2e_d5_d15_r3_r5",
+  "reload": false,
+  "verdict": "contextual",
+  "method": "transferred-stage12-witness",
+  "placement": "2q",
+  "include_noiseless": false,
+  "max_losses": null,
+  "witness": [
+    [
+      {},
+      [
+        60,
+        66,
+        90
+      ],
+      0
+    ],
+    [
+      {
+        "472": [
+          4,
+          13
+        ],
+        "476": [
+          31
+        ],
+        "482": [
+          5
+        ],
+        "488": [
+          6
+        ],
+        "509": [
+          21
+        ],
+        "527": [
+          12
+        ],
+        "531": [
+          20
+        ],
+        "540": [
+          47
+        ],
+        "544": [
+          24
+        ],
+        "568": [
+          36,
+          45,
+          76
+        ],
+        "572": [
+          23
+        ],
+        "576": [
+          60
+        ],
+        "580": [
+          34
+        ],
+        "582": [
+          22
+        ],
+        "604": [
+          59
+        ],
+        "606": [
+          62
+        ],
+        "610": [
+          1,
+          14
+        ],
+        "618": [
+          32
+        ],
+        "648": [
+          61
+        ],
+        "711": [
+          48
+        ]
+      },
+      [
+        56
+      ],
+      0
+    ],
+    [
+      {
+        "568": [
+          43
+        ],
+        "570": [
+          94
+        ],
+        "576": [
+          46
+        ],
+        "582": [
+          61,
+          95
+        ],
+        "604": [
+          22,
+          59
+        ],
+        "614": [
+          62
+        ],
+        "652": [
+          75
+        ],
+        "656": [
+          60
+        ],
+        "685": [
+          35,
+          45,
+          49,
+          77
+        ],
+        "689": [
+          48
+        ]
+      },
+      [
+        56,
+        60,
+        66,
+        90
+      ],
+      1
+    ]
+  ],
+  "witness_verified_shots": 128,
+  "witness_flow_verified": true,
+  "source_certificate": "results/cultivation/prefix/msc_stage12_d5_prefix__no_reload.json",
+  "source_circuit": "data/cultivation/msc_stage12_d5_prefix.stim",
+  "source_sha256": "0d204c7b33058ac27d444f730969a247cafb65e239488564d72b9ee765a90796",
+  "target_sha256": "688951f8d2a05c5781a04386bc2b19ec3c3d180bf409666579697757a087ab95",
+  "matched_physical_2q_pairs": 477,
+  "mapping": "directed-pair occurrences; physical 2q order is preserved on each source wire"
+}
