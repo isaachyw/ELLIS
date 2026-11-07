@@ -22,6 +22,8 @@ class CultivationReference:
     def __init__(self, circuit: stim.Circuit, reload: bool = False):
         self.circuit, self.reload = circuit.flattened(), reload
         mf.validate(self.circuit)
+        if any(mf.is_reload(inst) for inst in self.circuit):
+            raise ValueError("reload markers are not supported by the native reference plans")
         skeleton = mf.reference_skeleton(self.circuit)
         self.metadata = compile_plan(self.circuit)
         if self.metadata is None:

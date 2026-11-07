@@ -11,7 +11,7 @@
 namespace maskframe {
 
 enum class Kind : uint8_t {
-    SKIP,             // annotations, identities, I_ERROR without the `loss` tag
+    SKIP,             // annotations, identities, I_ERROR without the `loss` or `reload` tag
     STIM,             // stim::FrameSimulator::do_gate unchanged: single-qubit Cliffords and noise, detectors,
                       // observables.  A lost qubit's frame is never read again, so these need no mask.
     PAULI,            // X / Y / Z gates flip the frame (the reference is computed without them)
@@ -22,6 +22,7 @@ enum class Kind : uint8_t {
     DEPOLARIZE2,      // dropped where either operand is lost, like the gate it follows
     PAULI_CHANNEL_2,  // likewise
     LOSS,             // I_ERROR[loss](p): each target is lost with probability p
+    RELOAD,           // I_ERROR[reload]: each empty target slot gets a fresh atom in |0>
 };
 
 using ForcedLosses = std::map<int64_t, std::vector<uint32_t>>;

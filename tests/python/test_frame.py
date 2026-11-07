@@ -18,10 +18,12 @@ def matches_stim(c, losses, reload, seed):
     return same_distribution(a, ex.compile_sampler(seed=seed).sample(n))
 
 
-def random_circuit(rng, n=4, depth=14):
+def random_circuit(rng, n=4, depth=14, reload_markers=False):
     one, two = sorted(mf.UNITARY_1Q), sorted(mf.UNITARY_2Q)
     c = stim.Circuit()
     for _ in range(depth):
+        if reload_markers and rng.random() < 0.2:
+            c.append("I_ERROR", [int(rng.integers(n))], tag="reload")
         r = rng.random()
         if r < 0.3:                                   # repeated targets allowed, e.g. `S 1 1`
             c.append(str(rng.choice(one)), [int(q) for q in rng.integers(0, n, rng.integers(1, 4))])
@@ -51,7 +53,8 @@ def test_inverted_measurement_and_mpad():
     assert mf.explicit_lossy_circuit(c, {}).reference_sample().tolist() == [1, 1, 0, 0]
 
 
-@pytest.mark.parametrize("text", ["M 0\nCX rec[-1] 1", "MPP X0*X1", "HERALDED_ERASE(0.1) 0"])
+@pytest.mark.parametrize("text", ["M 0\nCX rec[-1] 1", "MPP X0*X1", "HERALDED_ERASE(0.1) 0",
+                                  "I_ERROR[reload](0.5) 0\nM 0"])
 def test_rejects_unsupported(text):
     with pytest.raises(ValueError):
         mf.sample(stim.Circuit(text), 10)
@@ -68,3 +71,25 @@ def test_every_clifford_gate_matches_stim_under_loss():
             if qs:
                 losses.setdefault(k, []).append(int(rng.choice(qs)))
         assert matches_stim(c, losses, bool(t % 2), t), (str(c), losses)
+
+
+def test_reload_markers_match_stim_under_loss():
+    # `I_ERROR[reload] q` anywhere: a fresh |0> in an empty slot, a present atom untouched
+    rng = np.random.default_rng(23)
+    for t in range(150):
+        c = random_circuit(rng, reload_markers=True)
+        flat, losses = list(c), {}
+        for _ in range(int(rng.integers(1, 4))):
+            k = int(rng.integers(len(flat)))
+            qs = [x.value for x in flat[k].targets_copy() if x.is_qubit_target]
+            if qs:
+                losses.setdefault(k, []).append(int(rng.choice(qs)))
+        assert matches_stim(c, losses, bool(t % 2), t), (str(c), losses)
+
+
+def test_reload_marker_restores_a_lost_atom_in_zero():
+    c = stim.Circuit("R 0 1\nX 0\nI_ERROR[loss](1) 0\nI_ERROR[reload] 0\nM 0\nCX 0 1\nM 1")
+    m, h = mf.sample(c, 200, seed=3)
+    assert not m.any() and not h.any()
+    m, _ = mf.sample(stim.Circuit("RX 0\nI_ERROR[reload] 0\nMX 0"), 200, seed=3)   # a present atom keeps |+>
+    assert not m.any()

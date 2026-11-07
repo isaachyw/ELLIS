@@ -33,7 +33,7 @@ from ellis.certify import certify
 from ellis.noise import surface_memory
 
 circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)   # I_ERROR[loss](p) marks loss sites
-cert = certify(circuit)                                         # verdict "proven", method "frame-css"
+cert = certify(circuit)            # losses after 2q gates (LossModel()); verdict "proven", method "frame-css"
 sampler = frame.compile_sampler(circuit, reference=cert.reference, seed=1)
 dets, obs = sampler.sample_detectors(10**6, bit_packed=True, threads=8)
 ```

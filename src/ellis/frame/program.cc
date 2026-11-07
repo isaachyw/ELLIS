@@ -15,6 +15,10 @@ bool is_loss(const stim::CircuitInstruction &inst) {
     return inst.gate_type == GateType::I_ERROR && inst.tag == "loss";
 }
 
+bool is_reload(const stim::CircuitInstruction &inst) {
+    return inst.gate_type == GateType::I_ERROR && inst.tag == "reload";
+}
+
 bool is_pauli_gate(GateType g) {
     return g == GateType::X || g == GateType::Y || g == GateType::Z;
 }
@@ -35,7 +39,7 @@ bool classify(const stim::CircuitInstruction &inst, Kind &kind) {
             kind = Kind::SKIP;
             return true;
         case GateType::I_ERROR:
-            kind = is_loss(inst) ? Kind::LOSS : Kind::SKIP;
+            kind = is_loss(inst) ? Kind::LOSS : is_reload(inst) ? Kind::RELOAD : Kind::SKIP;
             return true;
         case GateType::DETECTOR:
         case GateType::OBSERVABLE_INCLUDE:
@@ -158,6 +162,9 @@ Program compile(const stim::Circuit &circuit, bool reload, const uint8_t *refere
         if (kind == Kind::LOSS && inst.args.size() != 1) {
             reject(k, inst, "`I_ERROR[loss]` takes exactly one probability");
         }
+        if (kind == Kind::RELOAD && !inst.args.empty()) {
+            reject(k, inst, "`I_ERROR[reload]` takes no probability");
+        }
         const bool annotation = inst.gate_type == GateType::DETECTOR || inst.gate_type == GateType::OBSERVABLE_INCLUDE;
         std::vector<uint64_t> records;
         for (const auto &t : inst.targets) {
@@ -186,9 +193,9 @@ Program compile(const stim::Circuit &circuit, bool reload, const uint8_t *refere
             prog.reference[i] = reference[i] != 0;
         }
     } else {
-        stim::Circuit stripped;  // loss and Pauli gates removed; Pauli gates live in the frame instead
+        stim::Circuit stripped;  // loss, reload and Pauli gates removed; Pauli gates live in the frame instead
         for (const auto &inst : ops) {
-            if (!is_loss(inst) && !is_pauli_gate(inst.gate_type)) {
+            if (!is_loss(inst) && !is_reload(inst) && !is_pauli_gate(inst.gate_type)) {
                 stripped.safe_append(inst);
             }
         }
