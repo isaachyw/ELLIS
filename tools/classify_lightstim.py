@@ -1,13 +1,15 @@
 """Certify one reference record for the masked Pauli frame under atom loss (ellis.certify).
 
 usage: python tools/classify_lightstim.py [CIRCUIT.stim ...] [--benchmark] [--only SUBSTR ...]
-           [--placement 2q|any] [--reload] [--noiseless-loss] [--pairs] [--random N] [--max-losses K]
+           [--after 2q|any] [--from-start] [--reload marked|reset|anywhere] [--noiseless-loss] [--pairs]
+           [--random N] [--max-losses K]
            [--seed S] [--workers N] [--save DIR]
 
 Prints one JSON line per circuit: verdict ("proven" / "contextual" / "consistent_on_family"), method, the
-reference (number of ones), the gauge size, a minimal witness when contextual, and timing.  Proofs (frame-CSS,
-closed diagonal blocks) hold for every loss pattern of every model; a witness holds for the chosen --placement
-and --reload ("anywhere" = at any time, including at `noiseless` operations).
+reference (number of ones), the gauge size, a minimal witness when contextual, and timing.  Every verdict is for
+the loss model the flags define (ellis.certify.LossModel): losses after two-qubit gates (--after 2q) or after
+every operation (--after any), optionally before the first operation (--from-start) and at `noiseless`
+operations (--noiseless-loss); reload at I_ERROR[reload] markers, also at resets, or anywhere.
 --benchmark takes one circuit per LightStim protocol from tests/fixtures/lightstim (paper App. C).
 --save DIR writes DIR/<name>.cert.npz with the reference (and the witness or gauge as JSON text).
 """
@@ -19,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 import stim
-from ellis.certify import certify
+from ellis.certify import LossModel, certify
 
 LIGHTSTIM_CIRCUITS = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "lightstim"
 
@@ -36,8 +38,9 @@ def main():
     ap.add_argument("circuits", nargs="*", type=Path)
     ap.add_argument("--benchmark", action="store_true")
     ap.add_argument("--only", nargs="*", default=None, help="keep circuits whose name contains one of these")
-    ap.add_argument("--placement", choices=("2q", "any", "anywhere"), default="2q")
-    ap.add_argument("--reload", action="store_true")
+    ap.add_argument("--after", choices=("2q", "any"), default="2q")
+    ap.add_argument("--from-start", action="store_true")
+    ap.add_argument("--reload", choices=("marked", "reset", "anywhere"), default="marked")
     ap.add_argument("--noiseless-loss", action="store_true", help="also lose atoms at `noiseless`-tagged gates")
     ap.add_argument("--pairs", action="store_true", help="search every pair of single losses")
     ap.add_argument("--random", type=int, default=1000, help="random multi-loss patterns in the search")
@@ -51,8 +54,8 @@ def main():
         files = [f for f in files if any(s in f.name for s in a.only)]
     for f in files:
         t0 = time.perf_counter()
-        cert = certify(stim.Circuit(f.read_text()), placement=a.placement, reload=a.reload,
-                       include_noiseless=a.noiseless_loss, pairs=a.pairs, n_random=a.random,
+        model = LossModel(after=a.after, noiseless_loss_free=not a.noiseless_loss, from_start=a.from_start, reload=a.reload)
+        cert = certify(stim.Circuit(f.read_text()), model, pairs=a.pairs, n_random=a.random,
                        max_losses=a.max_losses, seed=a.seed, workers=a.workers)
         print(json.dumps(dict(circuit=f.stem, **cert.summary(), secs=round(time.perf_counter() - t0, 2))), flush=True)
         if a.save:

@@ -2,8 +2,8 @@
 //
 // Losing a qubit clears its alive bit and nothing reads its frame again.  Two-qubit gates (and their
 // DEPOLARIZE2 / PAULI_CHANNEL_2 noise) are dropped where either operand is lost, a lost qubit's readout
-// is a heralded uniformly random placeholder bit, and with `reload` a reset makes the qubit present
-// again.  Everything else is stim::FrameSimulator's own code, unchanged: single-qubit gates and noise,
+// is a heralded uniformly random placeholder bit, `I_ERROR[reload]` puts a fresh |0> atom into an empty
+// slot, and with `reload` a reset makes the qubit present again.  Everything else is stim::FrameSimulator's own code, unchanged: single-qubit gates and noise,
 // resets, detectors and observables, measurement-flip noise, the record, and the random stream.  With
 // nothing lost, the samples are bit-for-bit stim::FrameSimulator's for the same seed.
 #pragma once
@@ -141,6 +141,9 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                 return;
             case Kind::LOSS:
                 loss(inst);
+                return;
+            case Kind::RELOAD:
+                reload(inst);
                 return;
         }
     }
@@ -357,6 +360,25 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                     this->x_table[q] = this->z_table[q];
                 }
             }
+        }
+    }
+
+    /// I_ERROR[reload]: in each shot where the slot is empty, a fresh |0> atom: X part 0, Z part a fresh
+    /// random gauge bit (as Stim's reset), present again.  Present atoms are untouched.  The random bits are
+    /// drawn in every shot, so the random stream does not depend on losses.
+    void reload(const stim::CircuitInstruction &inst) {
+        const size_t n = words();
+        auto fresh = scratch.word_range_ref(0, n);
+        for (auto t : inst.targets) {
+            const size_t q = t.data;
+            fresh.randomize(fresh.num_bits_padded(), this->rng);
+            Word *x = this->x_table[q].ptr_simd, *z = this->z_table[q].ptr_simd;
+            const Word *a = alive_table[q].ptr_simd;
+            for (size_t w = 0; w < n; w++) {
+                x[w] = x[w] & a[w];
+                z[w] = (z[w] & a[w]) | a[w].andnot(fresh.ptr_simd[w]);
+            }
+            set_present(q);
         }
     }
 

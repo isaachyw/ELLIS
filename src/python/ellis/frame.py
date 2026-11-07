@@ -9,6 +9,8 @@ A lost qubit is simply frozen: nothing touches its frame again, its readouts are
 filled with a uniformly random placeholder bit (Clifft's convention).
 
 Loss instruction: `I_ERROR[loss](p) q...` (ppvm spelling; Stim parses and ignores it).
+Reload instruction: `I_ERROR[reload] q...` loads a fresh atom in |0> into each empty slot q and leaves a
+present atom alone.  It can stand anywhere; `reload=True` adds an implicit reload at every reset.
 `sample` below is the numpy reference implementation with all research options (gauges, reference
 tables, ...).  `compile_sampler` returns the C++ engine (ellis._core, built on Stim's SIMD bit
 tables): the same semantics in plain mode, batched and multithreaded, at close to Stim's speed.
@@ -70,11 +72,21 @@ def _distinct_chunks(qs, width):
     return chunks
 
 
+def is_loss(inst) -> bool:
+    return inst.name == "I_ERROR" and inst.tag == "loss"
+
+
+def is_reload(inst) -> bool:
+    return inst.name == "I_ERROR" and inst.tag == "reload"
+
+
 def validate(circuit: stim.Circuit) -> None:
     """Raise ValueError if the circuit uses an operation the masked frame cannot simulate exactly."""
     for k, inst in enumerate(circuit.flattened()):
         if inst.name in ANNOTATIONS:
             continue
+        if is_reload(inst) and inst.gate_args_copy():
+            raise ValueError(f"instruction {k} `{inst}`: `I_ERROR[reload]` takes no probability")
         if inst.name not in SUPPORTED:
             raise ValueError(f"instruction {k} `{inst}`: `{inst.name}` is not supported by the masked frame")
         for t in inst.targets_copy():
@@ -83,11 +95,11 @@ def validate(circuit: stim.Circuit) -> None:
 
 
 def strip_loss(circuit: stim.Circuit) -> stim.Circuit:
-    """Reference circuit: loss removed and Pauli gates removed (they live in the frame instead,
-    so that a Pauli on a lost qubit is masked like any other gate)."""
+    """Reference circuit: loss and reload markers removed and Pauli gates removed (they live in the frame
+    instead, so that a Pauli on a lost qubit is masked like any other gate)."""
     out = stim.Circuit()
     for inst in circuit.flattened():
-        if not (inst.name == "I_ERROR" and inst.tag == "loss") and inst.name not in PAULI:
+        if not (is_loss(inst) or is_reload(inst)) and inst.name not in PAULI:
             out.append(inst)
     return out
 
@@ -124,9 +136,9 @@ def canonical_reference(circuit: stim.Circuit):
             for q in qs: runs.setdefault(q, []).append(inst.name)
             continue
         if not (stim.gate_data(inst.name).is_noisy_gate and not stim.gate_data(inst.name).produces_measurements) \
-                or (inst.name == "I_ERROR" and inst.tag == "loss"):
+                or is_loss(inst) or is_reload(inst):
             for q in qs: close(q, k)
-        if not (inst.name == "I_ERROR" and inst.tag == "loss"):
+        if not (is_loss(inst) or is_reload(inst)):
             ref.append(inst)
     for q in list(runs): close(q, len(flat))
     return ref, inserts
@@ -242,6 +254,11 @@ def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = Fals
                     if track:
                         events += [(k, q, hit[i] & alive[q]) for i, q in enumerate(qs)]
                     alive[qs] &= ~hit
+                elif inst.tag == "reload":     # a fresh |0> in each empty slot: X part 0, Z part a fresh gauge bit
+                    empty = ~alive[qs]
+                    x[qs] &= ~empty
+                    z[qs] = np.where(empty, rnd(len(qs)), z[qs])
+                    alive[qs] = True
             elif name in RESET:
                 reset(qs, RESET[name])
             elif name in PAULI:                  # deterministic Pauli "error", masked
@@ -350,6 +367,8 @@ def reference_skeleton(circuit: stim.Circuit, software_feedforward: bool = False
         name, gd, targets = inst.name, stim.gate_data(inst.name), inst.targets_copy()
         if name == "MPAD":
             out.append((k, "pad", name, [t.value for t in targets]))
+        elif is_reload(inst):
+            out.append((k, "reload", "R", [t.value for t in targets]))
         elif name in ANNOTATIONS or name in PAULI or (gd.is_noisy_gate and not gd.produces_measurements):
             continue
         elif name in MEAS:                    # keep inverted targets (`M !q`)
@@ -371,6 +390,11 @@ def lossy_reference(skeleton, losses, reload: bool = False):
             lost.update(pending[i][1]); i += 1
         if kind == "pad":
             lines.append("MPAD " + " ".join(map(str, qs)))
+        elif kind == "reload":
+            for q in qs:
+                if q in lost:
+                    lost.discard(q)
+                    lines.append(f"R {q}")
         elif kind == "meas":
             for q, inv in qs:
                 if q not in lost:
@@ -401,14 +425,20 @@ def explicit_lossy_circuit(circuit: stim.Circuit, losses, reload: bool = False,
     """C_s for one loss pattern, as an ordinary Stim circuit.
     losses = {instruction_index: [qubits lost right after that instruction]}; index -1: lost from the start.
     Operations on lost qubits are removed; a lost readout becomes a fresh |+> ancilla measured
-    in Z (uniform placeholder bit), so the measurement record keeps its layout."""
+    in Z (uniform placeholder bit), so the measurement record keeps its layout.  A reload marker on an
+    empty slot becomes `R q`."""
     anc = circuit.num_qubits
     out = stim.Circuit()
     lost = set(losses.get(-1, ()))
     for k, inst in enumerate(circuit.flattened()):
         name, targets = inst.name, inst.targets_copy()
         qs = [t.value for t in targets]
-        if name in ANNOTATIONS or (name == "I_ERROR" and inst.tag == "loss"):
+        if is_reload(inst):
+            for q in qs:
+                if q in lost:
+                    lost.discard(q)
+                    out.append("R", [q])
+        elif name in ANNOTATIONS or is_loss(inst):
             if name != "I_ERROR":
                 out.append(inst)
         elif name in MEAS:

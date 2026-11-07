@@ -172,3 +172,26 @@ def test_noise_channels_match_stim(p):
         a = stats(c.compile_sampler(seed=1).sample(n))
         b = stats(native.MaskFrameSampler(c, seed=1).sample(n, heralds=False))
         assert close(a, b, n), (prep, a, b)
+
+
+@pytest.mark.parametrize("simd_width,batch_size", [(256, 256), (64, 64)])
+def test_reload_markers_match_stim_under_loss(simd_width, batch_size):
+    rng = np.random.default_rng(29)
+    for t in range(100):
+        c = random_circuit(rng, reload_markers=True)
+        flat, losses = list(c), {}
+        for _ in range(int(rng.integers(1, 4))):
+            k = int(rng.integers(len(flat)))
+            qs = [x.value for x in flat[k].targets_copy() if x.is_qubit_target]
+            if qs:
+                losses.setdefault(k, []).append(int(rng.choice(qs)))
+        assert native_matches_stim(c, losses, bool(t % 2), t, simd_width, batch_size), (str(c), losses)
+
+
+def test_reload_marker_agrees_with_numpy_sampler():
+    c = stim.Circuit("R 0 1\nX 0\nI_ERROR[loss](0.5) 0\nI_ERROR[reload] 0\nH 0\nCX 0 1\nM 0 1")
+    n = 20000
+    m1, h1 = mf.sample(c, n, seed=1)
+    m2, h2 = native.MaskFrameSampler(c, seed=1).sample(n)
+    assert close(m1.mean(0), m2.mean(0), n) and not h1.any() and not h2.any()
+    assert (m2[:, 0] == m2[:, 1]).all()

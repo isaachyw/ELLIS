@@ -41,6 +41,8 @@ def diagonal_blocks(circuit: stim.Circuit) -> DiagonalBlocks:
     gates that loss removes would have contributed no phase; the block's total phase on any Pauli with
     X-part x is that of U_B, i.e. 0 (or 2 c.x).  The rest is CSS, which adds no phase."""
     flat = list(circuit.flattened())
+    if any(mf.is_reload(inst) for inst in flat):
+        return DiagonalBlocks(False, reasons=["reload markers are outside the diagonal-block rule"])
     res = DiagonalBlocks(True)
     run, n_runs, run_qubit = {}, 0, []  # current run id per qubit; the qubit of each run
     member = {}  # (instruction, qubit) -> run id

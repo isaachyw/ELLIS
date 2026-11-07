@@ -30,12 +30,12 @@ def loss_slots(circuit: stim.Circuit, placement: str = "2q", include_noiseless: 
 
 
 def _events(circuit: stim.Circuit, reload: bool):
-    """Per qubit, the instruction indices a loss can act through: two-qubit gates, readouts, and (with
-    reload) resets."""
+    """Per qubit, the instruction indices a loss can act through: two-qubit gates, readouts, reload markers,
+    and (with reload) resets."""
     ev = {}
     for k, inst in enumerate(circuit.flattened()):
         name = inst.name
-        if name in mf.UNITARY_2Q or name in mf.MEAS or (reload and name in mf.RESET):
+        if name in mf.UNITARY_2Q or name in mf.MEAS or mf.is_reload(inst) or (reload and name in mf.RESET):
             for t in inst.targets_copy():
                 if t.is_qubit_target:
                     ev.setdefault(t.value, []).append(k)
@@ -65,10 +65,14 @@ def loss_family(
     n_random: int = 1000,
     max_losses: int = 4,
     seed: int = 0,
+    slots=None,
 ):
     """Loss patterns {instruction index: [qubits lost right after it]}: no loss, every single loss
-    (one per ghost class), optionally every pair, then n_random patterns of 2..max_losses losses."""
-    reps = representative_slots(circuit, loss_slots(circuit, placement, include_noiseless), reload)
+    (one per ghost class), optionally every pair, then n_random patterns of 2..max_losses losses.
+    slots: the loss locations, default loss_slots(circuit, placement, include_noiseless)."""
+    if slots is None:
+        slots = loss_slots(circuit, placement, include_noiseless)
+    reps = representative_slots(circuit, slots, reload)
     fam = [{}] + [{k: [q]} for k, q in reps]
     if pairs:
         fam += [_pattern((a, b)) for i, a in enumerate(reps) for b in reps[i + 1 :] if a[1] != b[1]]
