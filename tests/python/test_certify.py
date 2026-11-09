@@ -3,6 +3,7 @@ loss slots."""
 from pathlib import Path
 
 import numpy as np
+import pytest
 import stim
 from ellis.certify import (LossModel, certify, check_reference, constraints, frame_css, loss_family, loss_locations,
                            loss_slots, representative_slots, search)
@@ -171,7 +172,13 @@ def test_noiseless_prefix_is_checked_as_a_state():
     assert not frame_css(c, EVERY).proven                # the encoder itself may lose atoms
 
 
-def test_reload_markers():
+def test_failing_reload_marker_is_a_loss_location_where_the_slot_may_be_empty():
+    c = stim.Circuit("R 0 1\nI_ERROR[reload](0.5) 0 1\nCX 0 1\nI_ERROR[reload](0.5) 0 1\nI_ERROR[reload] 0\nM 0 1")
+    assert loss_locations(c, LossModel()) == [(2, 0), (2, 1), (3, 0), (3, 1)]
+
+
+@pytest.mark.parametrize("marker", ["I_ERROR[reload] 0\n", "I_ERROR[reload](0.5) 0\n"])
+def test_reload_markers(marker):
     # gates H S S H (= X) then H S S H again: identity at the CX, but X halfway through
     run = "H 0\nTICK\nS 0\nTICK\nS 0\nTICK\nH 0\nTICK\n"
     base = "R 0 1\nRX 2\nCX 2 0\n" + run + "{marker}" + run + "CX 0 1\nM 0 1\nMX 2"
@@ -179,12 +186,16 @@ def test_reload_markers():
     assert frame_css(plain).exact                         # no reload: exact
     rel = frame_css(plain, LossModel(reload="anywhere"))  # a reload where the gates so far are X reads 1 at the CX
     assert not rel.proven and "reload of qubit 0" in rel.reasons[0]
-    marked = stim.Circuit(base.format(marker="I_ERROR[reload] 0\n"))
+    marked = stim.Circuit(base.format(marker=marker))
     model = LossModel(after="any")
     rel = frame_css(marked, model)                        # the marker's reload: fixed by a masked gauge
     assert rel.proven and not rel.exact and rel.gauge
-    for i, s in enumerate(loss_family(marked, slots=loss_locations(marked, model), n_random=40, max_losses=3, seed=3)):
+    always = stim.Circuit(base.format(marker="I_ERROR[reload] 0\n"))   # family patterns fix each reload's outcome
+    fam = loss_family(marked, slots=loss_locations(marked, model), n_random=40, max_losses=3, seed=3)
+    k_marker = next(k for k, inst in enumerate(marked) if mf.is_reload(inst))
+    assert any(k_marker in s for s in fam) == ("(" in marker)     # failures are tested where reloads can fail
+    for i, s in enumerate(fam):
         n = marked.num_measurements + 100
-        a, _ = mf.sample(marked, n, seed=i, forced_losses=s, reference=rel.reference, gauge=rel.gauge)
-        b = mf.explicit_lossy_circuit(marked, s).compile_sampler(seed=i).sample(n)
+        a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference, gauge=rel.gauge)
+        b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s

@@ -162,8 +162,8 @@ Program compile(const stim::Circuit &circuit, bool reload, const uint8_t *refere
         if (kind == Kind::LOSS && inst.args.size() != 1) {
             reject(k, inst, "`I_ERROR[loss]` takes exactly one probability");
         }
-        if (kind == Kind::RELOAD && !inst.args.empty()) {
-            reject(k, inst, "`I_ERROR[reload]` takes no probability");
+        if (kind == Kind::RELOAD && inst.args.size() > 1) {
+            reject(k, inst, "`I_ERROR[reload]` takes at most one probability");
         }
         const bool annotation = inst.gate_type == GateType::DETECTOR || inst.gate_type == GateType::OBSERVABLE_INCLUDE;
         std::vector<uint64_t> records;

@@ -363,22 +363,28 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
         }
     }
 
-    /// I_ERROR[reload]: in each shot where the slot is empty, a fresh |0> atom: X part 0, Z part a fresh
-    /// random gauge bit (as Stim's reset), present again.  Present atoms are untouched.  The random bits are
-    /// drawn in every shot, so the random stream does not depend on losses.
+    /// I_ERROR[reload](p): in each shot where the slot is empty, with probability p (default 1), a fresh |0>
+    /// atom: X part 0, Z part a fresh random gauge bit (as Stim's reset), present again.  A failed reload
+    /// leaves the slot empty; present atoms are untouched.  The random bits are drawn in every shot, so the
+    /// random stream does not depend on losses.
     void reload(const stim::CircuitInstruction &inst) {
         const size_t n = words();
+        const float p = inst.args.empty() ? 1.0f : (float)inst.args[0];
         auto fresh = scratch.word_range_ref(0, n);
+        auto success = scratch.word_range_ref(n, n);
         for (auto t : inst.targets) {
             const size_t q = t.data;
             fresh.randomize(fresh.num_bits_padded(), this->rng);
-            Word *x = this->x_table[q].ptr_simd, *z = this->z_table[q].ptr_simd;
-            const Word *a = alive_table[q].ptr_simd;
-            for (size_t w = 0; w < n; w++) {
-                x[w] = x[w] & a[w];
-                z[w] = (z[w] & a[w]) | a[w].andnot(fresh.ptr_simd[w]);
+            if (p < 1) {
+                stim::biased_randomize_bits(p, success.u64, success.u64 + success.num_u64_padded(), this->rng);
             }
-            set_present(q);
+            Word *x = this->x_table[q].ptr_simd, *z = this->z_table[q].ptr_simd, *a = alive_table[q].ptr_simd;
+            for (size_t w = 0; w < n; w++) {
+                const Word filled = p < 1 ? a[w].andnot(success.ptr_simd[w]) : ~a[w];
+                x[w] = filled.andnot(x[w]);
+                z[w] = filled.andnot(z[w]) | (filled & fresh.ptr_simd[w]);
+                a[w] |= filled;
+            }
         }
     }
 

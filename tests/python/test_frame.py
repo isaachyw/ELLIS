@@ -54,7 +54,7 @@ def test_inverted_measurement_and_mpad():
 
 
 @pytest.mark.parametrize("text", ["M 0\nCX rec[-1] 1", "MPP X0*X1", "HERALDED_ERASE(0.1) 0",
-                                  "I_ERROR[reload](0.5) 0\nM 0"])
+                                  "I_ERROR[reload](0.5, 0.5) 0\nM 0"])
 def test_rejects_unsupported(text):
     with pytest.raises(ValueError):
         mf.sample(stim.Circuit(text), 10)
@@ -93,3 +93,24 @@ def test_reload_marker_restores_a_lost_atom_in_zero():
     assert not m.any() and not h.any()
     m, _ = mf.sample(stim.Circuit("RX 0\nI_ERROR[reload] 0\nMX 0"), 200, seed=3)   # a present atom keeps |+>
     assert not m.any()
+
+
+@pytest.mark.parametrize("p", [0.0, 0.3, 1.0])
+def test_reload_marker_succeeds_with_probability_p(p):
+    n = 20000
+    m, h = mf.sample(stim.Circuit(f"R 0\nI_ERROR[loss](1) 0\nI_ERROR[reload]({p}) 0\nM 0"), n, seed=4)
+    assert abs(h.mean() - (1 - p)) < 5 * np.sqrt(p * (1 - p) / n) + 1e-9
+    assert not m[~h].any()                                # a reloaded atom reads its fresh |0>
+
+
+def test_failed_reload_is_a_loss_right_after_the_marker():
+    c = stim.Circuit("R 0 1\nX 0\nI_ERROR[loss](0.5) 0\nI_ERROR[reload](0.5) 0\nH 0\nCX 0 1\nM 0 1")
+    m, h, patterns = mf.sample(c, 4000, seed=5, return_losses=True)
+    assert (h[:, 0] == [0 in s.get(3, ()) for s in patterns]).all()
+    groups = {}
+    for j, s in enumerate(patterns):
+        groups.setdefault(tuple(sorted((k, tuple(qs)) for k, qs in s.items())), []).append(j)
+    assert set(groups) == {(), ((2, (0,)),), ((2, (0,)), (3, (0,)))}
+    for key, idx in groups.items():
+        exact = mf.explicit_lossy_circuit(c, dict(key)).compile_sampler(seed=6).sample(len(idx))
+        assert same_distribution(m[idx], exact), key
