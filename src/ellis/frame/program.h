@@ -22,7 +22,7 @@ enum class Kind : uint8_t {
     DEPOLARIZE2,      // dropped where either operand is lost, like the gate it follows
     PAULI_CHANNEL_2,  // likewise
     LOSS,             // I_ERROR[loss](p): each target is lost with probability p
-    RELOAD,           // I_ERROR[reload]: each empty target slot gets a fresh atom in |0>
+    RELOAD,           // I_ERROR[reload](p): each empty target slot gets a fresh atom in |0> with probability p (default 1)
 };
 
 using ForcedLosses = std::map<int64_t, std::vector<uint32_t>>;

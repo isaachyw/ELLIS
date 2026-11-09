@@ -9,8 +9,10 @@ A lost qubit is simply frozen: nothing touches its frame again, its readouts are
 filled with a uniformly random placeholder bit (Clifft's convention).
 
 Loss instruction: `I_ERROR[loss](p) q...` (ppvm spelling; Stim parses and ignores it).
-Reload instruction: `I_ERROR[reload] q...` loads a fresh atom in |0> into each empty slot q and leaves a
-present atom alone.  It can stand anywhere; `reload=True` adds an implicit reload at every reset.
+Reload instruction: `I_ERROR[reload](p) q...` loads a fresh atom in |0> into each empty slot q with
+probability p (default 1) and leaves a present atom alone; a failed reload leaves the slot empty, which is
+the same as a successful reload followed by a loss right after the marker (how explicit loss patterns write
+it).  It can stand anywhere; `reload=True` adds an implicit, always successful reload at every reset.
 `sample` below is the numpy reference implementation with all research options (gauges, reference
 tables, ...).  `compile_sampler` returns the C++ engine (ellis._core, built on Stim's SIMD bit
 tables): the same semantics in plain mode, batched and multithreaded, at close to Stim's speed.
@@ -85,8 +87,8 @@ def validate(circuit: stim.Circuit) -> None:
     for k, inst in enumerate(circuit.flattened()):
         if inst.name in ANNOTATIONS:
             continue
-        if is_reload(inst) and inst.gate_args_copy():
-            raise ValueError(f"instruction {k} `{inst}`: `I_ERROR[reload]` takes no probability")
+        if is_reload(inst) and len(inst.gate_args_copy()) > 1:
+            raise ValueError(f"instruction {k} `{inst}`: `I_ERROR[reload]` takes at most one probability")
         if inst.name not in SUPPORTED:
             raise ValueError(f"instruction {k} `{inst}`: `{inst.name}` is not supported by the masked frame")
         for t in inst.targets_copy():
@@ -160,7 +162,8 @@ def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = Fals
            return_losses: bool = False, software_feedforward: bool = False, lost_partner_idle_p: float = 0.0):
     """Returns (measurements, heralds) as (shots, num_measurements) bool arrays.
     return_losses: plain mode only; also return each shot's loss events as {instruction_index: [qubits]}, one dict
-           per shot, recording only atoms that were alive (a repeated loss of a lost atom is not an event).
+           per shot, recording only atoms that were alive (a repeated loss of a lost atom is not an event), plus
+           each failed reload as a loss right after its marker.
     software_feedforward: a CX tagged 'feedforward_t' / 'feedforward_c' (a classically controlled Pauli done in software,
            e.g. SWAP SE's correction) acts whenever its corrected operand (target / control) is present, even if the measured
            partner is lost: the correction then uses the lost atom's frozen frame, as a Stim feedback gate `CX rec[-k] q`
@@ -256,9 +259,14 @@ def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = Fals
                     alive[qs] &= ~hit
                 elif inst.tag == "reload":     # a fresh |0> in each empty slot: X part 0, Z part a fresh gauge bit
                     empty = ~alive[qs]
+                    if args and args[0] < 1:
+                        failed = empty & ~coin(args[0], len(qs))
+                        if track:
+                            events += [(k, q, failed[i]) for i, q in enumerate(qs)]
+                        empty &= ~failed
                     x[qs] &= ~empty
                     z[qs] = np.where(empty, rnd(len(qs)), z[qs])
-                    alive[qs] = True
+                    alive[qs] |= empty
             elif name in RESET:
                 reset(qs, RESET[name])
             elif name in PAULI:                  # deterministic Pauli "error", masked

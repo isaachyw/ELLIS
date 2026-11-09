@@ -195,3 +195,13 @@ def test_reload_marker_agrees_with_numpy_sampler():
     m2, h2 = native.MaskFrameSampler(c, seed=1).sample(n)
     assert close(m1.mean(0), m2.mean(0), n) and not h1.any() and not h2.any()
     assert (m2[:, 0] == m2[:, 1]).all()
+
+
+def test_probabilistic_reload_agrees_with_numpy_sampler():
+    c = stim.Circuit("R 0 1\nX 0\nI_ERROR[loss](0.5) 0\nI_ERROR[reload](0.4) 0\nH 0\nCX 0 1\nM 0 1")
+    n = 20000
+    m1, h1 = mf.sample(c, n, seed=1)
+    m2, h2 = native.MaskFrameSampler(c, seed=1).sample(n)
+    assert close(m1.mean(0), m2.mean(0), n) and close(h1.mean(0), h2.mean(0), n)
+    assert close(h2[:, 0].mean(), np.array(0.5 * 0.6), n) and not h2[:, 1].any()
+    assert (m2[~h2[:, 0], 0] == m2[~h2[:, 0], 1]).all()     # a present or reloaded atom stays correlated

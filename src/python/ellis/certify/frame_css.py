@@ -2,7 +2,8 @@
 
 Loss model (`LossModel`).  A loss discards an atom: its later operations are dropped (a two-qubit gate as a
 whole) and its readouts become fair coins.  Losses may follow the model's loss locations (`loss_slots`).
-A reload puts a fresh atom into an empty slot: at every `I_ERROR[reload] q` marker, plus at resets
+A reload puts a fresh atom into an empty slot: at every `I_ERROR[reload](p) q` marker (failing with
+probability 1 - p, a loss location right after the marker), plus at resets
 (reload="reset") or between any two operations (reload="anywhere").  The fresh atom is |0>, or maximally
 mixed (reload_state="mixed").  The loss-free prefix is everything up to the first loss location.
 
@@ -76,9 +77,17 @@ class LossModel:
 
 
 def loss_locations(circuit: stim.Circuit, model: LossModel):
-    """(k, q): q may be lost right after instruction k (k = -1: before the first instruction)."""
+    """(k, q): q may be lost right after instruction k (k = -1: before the first instruction).  A reload marker
+    `I_ERROR[reload](p)` with p < 1 adds (k, q) for each target q that may be empty there: its failure."""
     start = [(-1, q) for q in range(circuit.num_qubits)] if model.from_start else []
-    return start + loss_slots(circuit, model.after, not model.noiseless_loss_free)
+    locations = start + loss_slots(circuit, model.after, not model.noiseless_loss_free)
+    first = {}
+    for k, q in locations:
+        first[q] = min(first.get(q, k), k)
+    for k, inst in enumerate(circuit.flattened()):
+        if mf.is_reload(inst) and inst.gate_args_copy() and inst.gate_args_copy()[0] < 1:
+            locations += [(k, q) for q in dict.fromkeys(t.value for t in inst.targets_copy()) if first.get(q, k) < k]
+    return sorted(locations, key=lambda s: s[0])     # stable: unchanged order without failing reloads
 
 
 # ------------------------------------------------------------------ frames and gate shapes
