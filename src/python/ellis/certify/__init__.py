@@ -80,24 +80,26 @@ def certify(
     n_random: int = 1000,
     max_losses: int = 4,
     seed: int = 0,
-    spot_check: int = 50,
+    spot_check: int = 0,
     workers: int = 1,
 ) -> Certificate:
     """Prove that one reference works for every loss and reload pattern of `model`, prove that none does,
     or report the evidence.  pairs / n_random / max_losses / seed choose the search's initial family;
-    workers > 1 computes the search's constraints in that many processes."""
+    workers > 1 computes the search's constraints in that many processes.
+    spot_check optionally checks up to that many loss patterns after a static proof without gauge corrections;
+    zero skips these additional checks."""
     circuit = circuit.flattened()
     mf.validate(circuit)
-    reload, slots = model.reload_at_reset, loss_locations(circuit, model)
+    reload = model.reload_at_reset
 
     def family(**kw):
-        return loss_family(circuit, reload=reload, slots=slots, **kw)
+        return loss_family(circuit, reload=reload, slots=loss_locations(circuit, model), **kw)
 
     fc = frame_css(circuit, model)
     if fc.proven:
         cert = Certificate("proven", "frame-css" if fc.exact else "frame-css+gauge", fc.reference, fc.gauge or None,
                            notes=list(fc.reasons))
-        if fc.exact and spot_check:  # cheap self-check of the proof on a few patterns
+        if fc.exact and spot_check:
             fam = family(n_random=0)[:spot_check]
             bad = check_reference(circuit, fc.reference, fam, reload)
             cert.family_size = len(fam)

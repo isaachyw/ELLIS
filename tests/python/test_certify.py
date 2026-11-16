@@ -48,6 +48,7 @@ def test_css_memory_is_proven_with_zero_reference():
     cert = certify(c)
     assert (cert.verdict, cert.method) == ("proven", "frame-css")
     assert cert.reference is not None and not cert.reference.any()
+    assert cert.family_size == 0
 
 
 def test_cz_coupling_is_frame_css():
@@ -59,12 +60,13 @@ def test_cz_coupling_is_frame_css():
 EVERY = LossModel(after="any", noiseless_loss_free=False, from_start=True)
 
 
-def test_every_loss_location_on_static_proofs():
-    # losses after every operation and before the first: the spot check samples that family
-    cert = certify(stim.Circuit("RX 0\nR 1\nCZ 0 1\nMX 0\nM 1"), EVERY)
-    assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "frame-css", True)
-    cert = certify(stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nMX 0 1 2"), EVERY)
-    assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "diagonal-blocks", True)
+@pytest.mark.parametrize("spot_check", [0, 50])
+def test_every_loss_location_on_static_proofs(spot_check):
+    # Static proofs cover every loss location; additional pattern checks are optional.
+    cert = certify(stim.Circuit("RX 0\nR 1\nCZ 0 1\nMX 0\nM 1"), EVERY, spot_check=spot_check)
+    assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "frame-css", bool(spot_check))
+    cert = certify(stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nMX 0 1 2"), EVERY, spot_check=spot_check)
+    assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "diagonal-blocks", bool(spot_check))
 
 
 def test_benchmark_xzzx_is_proven():
