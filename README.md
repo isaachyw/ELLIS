@@ -13,6 +13,10 @@ tableau reference.
   from a small prefix tableau and a CSS gauge sweep, and falls back to the full tableau when its checks
   fail.
 
+## Sampling performance
+
+![Single-thread sampling throughput for ELLIS, PPVM, and Clifft on BB144 and distance-7 transversal CNOT circuits with atom loss.](docs/figures/single_thread.png).
+
 ## Install
 
 ```bash
@@ -32,8 +36,8 @@ from ellis import frame
 from ellis.certify import certify
 from ellis.noise import surface_memory
 
-circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)   # I_ERROR[loss](p) marks loss sites
-cert = certify(circuit)            # losses after 2q gates (LossModel()); verdict "proven", method "frame-css"
+circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)  # I_ERROR[loss](p) marks loss sites
+cert = certify(circuit)  # losses after 2q gates (LossModel()); verdict "proven", method "frame-css"
 sampler = frame.compile_sampler(circuit, reference=cert.reference, seed=1)
 dets, obs = sampler.sample_detectors(10**6, bit_packed=True, threads=8)
 ```
