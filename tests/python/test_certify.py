@@ -319,3 +319,10 @@ def test_constraints_read_fused_measure_resets_in_order(reset):
     samples = c.compile_sampler(seed=1).sample(500)
     assert len(set(samples[:, 1])) == 1 and len(set(samples[:, 0])) == 2
     assert [(y, v) for y, v in constraints(c, {})] == [(0b10, 0)]
+
+
+def test_a_reload_that_may_fail_empties_the_slot_again():
+    # the certain reload fills the slot; the uncertain one may fail, a loss location, so the reloads anywhere after
+    # it must hold in the frames C_NZYX, S C_NZYX, ... which no frame allows (found by the oracle sweep)
+    c = stim.Circuit("XCX 1 0\nI_ERROR[reload] 0\nI_ERROR[reload](0.5) 0\nC_NZYX 0\nS 0\nC_XYNZ 0")
+    assert frame_css(c, LossModel(reload="anywhere")).verdict == "not-frame-css"

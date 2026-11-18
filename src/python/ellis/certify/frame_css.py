@@ -289,22 +289,20 @@ def _certify(flat, model, res):
     for k in range(k0 + 1, len(ops)):
         inst = ops[k]
         name, gd, targets = inst.name, stim.gate_data(inst.name), inst.targets_copy()
+        qs = [t.value for t in targets]
         if name == "MPAD":
             for t in targets:
                 kappa[m] = bool(t.value)
                 m += 1
-            continue
-        if mf.is_reload(inst):
+        elif mf.is_reload(inst):
             certain = not inst.gate_args_copy() or inst.gate_args_copy()[0] >= 1
-            for t in targets:
-                reload_point(t.value, k, marked=True)
+            for q in qs:
+                reload_point(q, k, marked=True)
                 if certain:                                 # the slot is full until the qubit's next loss location
-                    may_be_lost.discard(t.value)
-            continue
-        if name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
-            continue
-        qs = [t.value for t in targets]
-        if name in mf.UNITARY_1Q:
+                    may_be_lost.discard(q)
+        elif name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
+            pass
+        elif name in mf.UNITARY_1Q:
             g = stim.Tableau.from_named_gate(name)
             for q in qs:
                 A[q] = g * A[q]
