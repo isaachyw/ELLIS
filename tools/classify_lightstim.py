@@ -60,7 +60,7 @@ def main():
         print(json.dumps(dict(circuit=f.stem, **cert.summary(), secs=round(time.perf_counter() - t0, 2))), flush=True)
         if a.save:
             a.save.mkdir(parents=True, exist_ok=True)
-            extra = cert.witness if cert.witness is not None else cert.gauge
+            extra = cert.witness
             np.savez_compressed(a.save / f"{f.stem}.cert.npz", reference=cert.reference if cert.reference is not None
                                 else np.zeros(0, bool), verdict=cert.verdict, method=cert.method,
                                 extra=json.dumps(extra, default=str))

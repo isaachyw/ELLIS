@@ -7,10 +7,12 @@ tableau reference.
 - **Masked frame sampler.** `ellis.frame` and the C++ engine `ellis._core.MaskFrameSampler`, built on
   Stim's `FrameSimulator`. A lost qubit drops its later gates, and its readouts become fair coins.
 - **Common-reference certificates.** `ellis.certify` proves that one reference is exact for every loss
-  pattern (frame-CSS relabelling, closed S/CZ blocks), or returns a signed-parity contradiction that
-  shows no such reference exists. `frame_css` decides frame-CSS exactly; a circuit outside the
-  assumptions that make the decision exact (classical feedback, multi-qubit measurements, a prefix with
-  too many open frame choices) gets verdict `"outside-assumptions"` instead.
+  pattern of every loss model, by frame-CSS relabelling under the most pessimistic model (loss after every
+  operation, |0> reload anywhere), or returns a signed-parity contradiction that shows no such reference
+  exists. The proof is sufficient, not necessary: a circuit that fails it may still have a common reference
+  under a weaker model. `frame_css` decides frame-CSS under that model exactly; a circuit outside the
+  assumptions that make the decision exact (classical feedback, multi-qubit measurements) gets verdict
+  `"outside-assumptions"` instead.
 - **MSC S-proxy references.** `ellis.msc.reference.CultivationReference` computes a reference for each loss pattern
   from a small prefix tableau and a CSS gauge sweep, and falls back to the full tableau when its checks
   fail.
@@ -64,7 +66,7 @@ sinter decoder.
 | `src/ellis/frame/` | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler |
 | `src/ellis/reference/` | C++ exact references for a loss pattern: full tableau (`Plan`) and MSC prefix (`FastPlan`) |
 | `src/python/bindings.cc` | the `ellis._core` module |
-| `src/python/ellis/` | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `msc/`, `noise`, `sinter`, `gf2`, `check_exact` |
+| `src/python/ellis/` | `frame`, `certify/` (`frame_css`, `constraints`), `msc/`, `noise`, `sinter`, `gf2`, `check_exact` |
 | `tests/python/` | tests against Stim on explicit lossy circuits; fixtures in `tests/fixtures/` |
 | `tools/` | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters |
 | `cmake/` | Stim fetch, compiler selection, SIMD flags |

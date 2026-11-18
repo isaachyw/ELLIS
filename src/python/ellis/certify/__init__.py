@@ -3,14 +3,16 @@
 The masked frame gets every shot's randomness and every Pauli flip right for any loss pattern s; the
 only shared ingredient is the reference record r, which must be a possible noiseless record of every lossy
 circuit C_s (gate-drop semantics; lost readouts are coins).  Equivalently r must satisfy y.r = sigma_s(y)
-for every deterministic parity y of every C_s.  `certify(circuit)` decides this in up to three steps:
+for every deterministic parity y of every C_s.  `certify(circuit, model)` decides this in up to two steps:
 
-  1. a static PROOF for every loss and reload pattern of the loss model (`LossModel`): frame-CSS, i.e. CSS in
-     one local frame per state segment (frame_css.py).  It gives the reference kappa.  A circuit outside the
-     assumptions under which frame_css decides frame-CSS exactly stops here, verdict "outside-assumptions";
-     any other circuit must use only operations the masked frame simulates exactly (frame.validate);
-  2. otherwise a static proof from closed S/CZ blocks (blocks.py; not for reload="anywhere");
-  3. otherwise an exact search (constraints.py): the GF(2) system of the exact sign constraints of a family of loss
+  1. a static PROOF: frame-CSS under the most pessimistic model (frame_css.PESSIMISTIC: loss before the first
+     operation and after every operation, |0> reload anywhere), i.e. CSS in one local frame per state segment
+     (frame_css.py).  It gives the reference kappa, common to every pattern of every loss model, `model` included.
+     This is sufficient, not necessary: a circuit that fails it may still have a common reference under `model`.
+     A circuit outside the assumptions under which frame_css decides frame-CSS exactly stops here, verdict
+     "outside-assumptions"; any other circuit must use only operations the masked frame simulates exactly
+     (frame.validate);
+  2. otherwise an exact search under `model` (constraints.py): the GF(2) system of the exact sign constraints of a family of loss
      patterns (no loss, every single loss up to ghost equivalence, optionally all pairs, random multi-loss
      patterns).  The constraints come from Stim's flow generators of each lossy circuit, with no sampling.
      A contradiction is a PROOF that no single reference exists, returned as a witness; no contradiction
@@ -30,7 +32,6 @@ import numpy as np
 import stim
 
 from ellis import frame as mf
-from ellis.certify.blocks import DiagonalBlocks, diagonal_blocks
 from ellis.certify.constraints import (
     PLACEMENTS,
     _Search,
@@ -42,19 +43,18 @@ from ellis.certify.constraints import (
     search,
     verify_witness,
 )
-from ellis.certify.frame_css import FrameCSS, LossModel, frame_css, loss_locations
+from ellis.certify.frame_css import PESSIMISTIC, FrameCSS, LossModel, frame_css, loss_locations
 
-__all__ = ["PLACEMENTS", "Certificate", "DiagonalBlocks", "FrameCSS", "LossModel", "certify", "check_reference",
-           "constraints", "diagonal_blocks", "frame_css", "loss_family", "loss_locations", "loss_slots",
-           "representative_slots", "search", "verify_witness"]
+__all__ = ["PESSIMISTIC", "PLACEMENTS", "Certificate", "FrameCSS", "LossModel", "certify", "check_reference",
+           "constraints", "frame_css", "loss_family", "loss_locations", "loss_slots", "representative_slots",
+           "search", "verify_witness"]
 
 
 @dataclass
 class Certificate:
     verdict: str  # "proven", "contextual", "consistent_on_family" or "outside-assumptions"
-    method: str  # "frame-css", "diagonal-blocks", "diagonal-blocks+gauge", "exact-search" or "scope"
+    method: str  # "frame-css", "exact-search" or "scope"
     reference: np.ndarray | None = None
-    gauge: dict | None = None  # for frame.sample(gauge=...), with the "diagonal-blocks+gauge" method
     witness: list | None = None  # [(loss pattern, [measurement indices of y], value)], sums to 0 = 1
     family_size: int = 0
     notes: list = field(default_factory=list)
@@ -64,7 +64,6 @@ class Certificate:
             "verdict": self.verdict,
             "method": self.method,
             "reference_ones": None if self.reference is None else int(self.reference.sum()),
-            "gauge_paulis": sum(len(v) for v in (self.gauge or {}).values()),
             "witness_patterns": None if self.witness is None else [w[0] for w in self.witness],
             "family_size": self.family_size,
             "notes": self.notes,
@@ -83,18 +82,18 @@ def certify(
     spot_check: int = 0,
     workers: int = 1,
 ) -> Certificate:
-    """Prove that one reference works for every loss and reload pattern of `model`, prove that none does,
-    or report the evidence.  pairs / n_random / max_losses / seed choose the search's initial family;
-    workers > 1 computes the search's constraints in that many processes.
-    spot_check optionally checks up to that many loss patterns after a static proof without gauge corrections;
-    zero skips these additional checks."""
+    """Prove that one reference works for every loss and reload pattern of every loss model (frame-CSS under
+    PESSIMISTIC), prove that none does under `model`, or report the evidence.  pairs / n_random / max_losses /
+    seed choose the search's initial family; workers > 1 computes the search's constraints in that many processes.
+    spot_check optionally checks up to that many loss patterns of `model` after a static proof; zero skips
+    these additional checks."""
     circuit = circuit.flattened()
     reload = model.reload_at_reset
 
     def family(**kw):
         return loss_family(circuit, reload=reload, slots=loss_locations(circuit, model), **kw)
 
-    fc = frame_css(circuit, model)
+    fc = frame_css(circuit)
     if fc.verdict == "outside-assumptions":
         return Certificate("outside-assumptions", "scope", notes=list(fc.reasons))
     mf.validate(circuit)
@@ -107,26 +106,9 @@ def certify(
             if bad:
                 raise AssertionError(f"frame-CSS reference fails on {bad[:3]}: a bug, please report")
         return cert
-    blk = DiagonalBlocks(False, reasons=["reload anywhere is outside the diagonal-block rule"])
-    if model.reload != "anywhere":
-        blk = diagonal_blocks(circuit)
-    if blk.proven:
-        cert = Certificate(
-            "proven",
-            "diagonal-blocks" if not blk.gauge else "diagonal-blocks+gauge",
-            blk.reference,
-            blk.gauge or None,
-            notes=[f"{blk.blocks} closed S/CZ blocks; not frame-CSS: {fc.reasons[0]}"],
-        )
-        if not blk.gauge and spot_check:
-            fam = family(n_random=0)[:spot_check]
-            if bad := check_reference(circuit, blk.reference, fam, reload):
-                raise AssertionError(f"diagonal-block reference fails on {bad[:3]}: a bug, please report")
-            cert.family_size = len(fam)
-        return cert
     srch = _Search(circuit, reload, workers)
     witness = srch.extend(family(pairs=pairs, n_random=n_random, max_losses=max_losses, seed=seed))
-    notes = [f"not frame-CSS: {'; '.join(fc.reasons[:3])}", f"no closed diagonal blocks: {'; '.join(blk.reasons[:2])}"]
+    notes = [f"not frame-CSS under the pessimistic model: {'; '.join(fc.reasons[:3])}"]
     if model.reload == "anywhere":
         notes.append("the search family has no reloads")
     if witness is not None:

@@ -1,11 +1,11 @@
-"""certify(): frame-CSS proofs under a loss model, contradiction witnesses, exact sign constraints, ghost-equivalent
+"""certify(): frame-CSS proofs under the pessimistic loss model, contradiction witnesses, exact sign constraints, ghost-equivalent
 loss slots."""
 from pathlib import Path
 
 import numpy as np
 import pytest
 import stim
-from ellis.certify import (LossModel, certify, check_reference, constraints, frame_css, loss_family, loss_locations,
+from ellis.certify import (PESSIMISTIC, LossModel, certify, check_reference, constraints, frame_css, loss_family, loss_locations,
                            loss_slots, representative_slots, search)
 from ellis.check_exact import same_distribution
 from ellis.gf2 import Span, to_ints
@@ -57,16 +57,20 @@ def test_cz_coupling_is_frame_css():
     assert cert.verdict == "proven"
 
 
-EVERY = LossModel(after="any", noiseless_loss_free=False, from_start=True)
-
-
 @pytest.mark.parametrize("spot_check", [0, 50])
 def test_every_loss_location_on_static_proofs(spot_check):
     # Static proofs cover every loss location; additional pattern checks are optional.
-    cert = certify(stim.Circuit("RX 0\nR 1\nCZ 0 1\nMX 0\nM 1"), EVERY, spot_check=spot_check)
+    cert = certify(stim.Circuit("RX 0\nR 1\nCZ 0 1\nMX 0\nM 1"), PESSIMISTIC, spot_check=spot_check)
     assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "frame-css", bool(spot_check))
-    cert = certify(stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nMX 0 1 2"), EVERY, spot_check=spot_check)
-    assert (cert.verdict, cert.method, cert.family_size > 0) == ("proven", "diagonal-blocks", bool(spot_check))
+
+
+@pytest.mark.parametrize("model", [LossModel(), LossModel(after="any"), LossModel(reload="reset"), PESSIMISTIC])
+def test_the_proof_ignores_the_model_and_holds_for_each(model):
+    c = stim.Circuit("RY 0 1 2\nS 0\nCZ 2 0\nMX 0\nM 1\nMY 2")
+    cert = certify(c, model)
+    assert cert.verdict == "proven" and cert.reference.tolist() == frame_css(c).reference.tolist()
+    fam = loss_family(c, reload=model.reload_at_reset, slots=loss_locations(c, model), pairs=True)
+    assert check_reference(c, cert.reference, fam, model.reload_at_reset) == []
 
 
 def test_benchmark_xzzx_is_proven():
@@ -75,11 +79,11 @@ def test_benchmark_xzzx_is_proven():
 
 
 def test_kappa_differs_from_stim_reference():
-    c = stim.Circuit("SQRT_Y_DAG 0\nRX 1\nS 1\nSQRT_X 2\nCX 1 2\nCZ 1 0\nMX 0\nM 1\nMY 2")
-    rel = frame_css(c, EVERY)
+    c = stim.Circuit("RY 0 1 2\nS 0\nCZ 2 0\nMX 0\nM 1\nMY 2")
+    rel = frame_css(c)
     assert rel.verdict == "frame-css" and rel.reference is not None
-    assert rel.reference.astype(int).tolist() == [1, 0, 1]
-    fam = loss_family(c, slots=loss_locations(c, EVERY), n_random=0)
+    assert rel.reference.astype(int).tolist() == [1, 0, 0]
+    fam = loss_family(c, slots=loss_locations(c, PESSIMISTIC), n_random=0)
     assert check_reference(c, rel.reference, fam) == []
     assert check_reference(c, mf.strip_loss(c).reference_sample(), fam)   # Stim's own reference fails
 
@@ -130,20 +134,10 @@ def test_ghost_equivalent_slots_collapse():
     assert [k for k, q in reps if q == 0] == [0, 3, 5]
 
 
-def test_closed_diagonal_blocks():
+def test_closed_s_blocks_are_no_proof_and_fall_back_to_the_search():
+    # S S = Z between two CZs is identity up to a Pauli, but a loss or reload between them changes the circuit
     s4 = stim.Circuit(min(LIGHTSTIM_CIRCUITS.glob("*logical_s_to_the_fourth*")).read_text())
-    cert = certify(s4)
-    assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks")
-    # a CZ triangle (odd cycle: not frame-CSS) applied twice is I, and S.S = Z leaves a Z on qubit 0:
-    # proven with a masked Z gauge, and the gauged sampler is exact (qubit 0 ends in |->)
-    c = stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nS 0\nS 0\nMX 0 1 2")
-    assert frame_css(c).verdict == "outside-assumptions"  # the prefix would end inside the fused CZ layer
-    assert not frame_css(c, EVERY).proven  # a loss between the triangles' CZs
-    cert = certify(c, EVERY)
-    assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks+gauge")
-    m, _ = mf.sample(c, 100, reference=cert.reference, gauge=cert.gauge)
-    assert (m == [1, 0, 0]).all()
-    # a lone S is no closed block: not provable statically, and the exact search finds no contradiction
+    assert certify(s4, n_random=0).method == "exact-search"
     cert = certify(stim.Circuit("RX 0 1\nCZ 0 1\nS 0\nCZ 0 1\nMX 0 1"))
     assert (cert.verdict, cert.method) == ("consistent_on_family", "exact-search")
 
@@ -151,27 +145,24 @@ def test_closed_diagonal_blocks():
 def test_gate_shapes_beyond_controlled_paulis():
     # CXSWAP is a permutation gate: it ties the two frames.  ISWAP is CSS in no local frame.
     assert certify(stim.Circuit("R 0 1\nRX 2\nCX 2 0\nCXSWAP 0 1\nM 0 1\nMX 2")).verdict == "proven"
-    rel = frame_css(stim.Circuit("RX 0\nR 1 2\nCX 0 2\nISWAP 0 1\nM 0 1 2"), EVERY)
+    rel = frame_css(stim.Circuit("RX 0\nR 1 2\nCX 0 2\nISWAP 0 1\nM 0 1 2"))
     assert not rel.proven and "no local frame" in rel.reasons[0]
 
 
 def test_readouts_start_new_segments():
     # qubit 0 is read, rotated by H and reused with the same partner: the readout starts a new frame
     c = stim.Circuit("RX 0\nR 1\nCX 0 1\nMX 0\nH 0\nCX 0 1\nM 0 1")
-    rel = frame_css(c, EVERY)
+    rel = frame_css(c)
     assert rel.proven
-    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, EVERY), n_random=50, seed=1)) == []
+    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, PESSIMISTIC), n_random=50, seed=1)) == []
 
 
-def test_noiseless_prefix_is_checked_as_a_state():
-    # the noiseless encoder uses ISWAP, CSS in no frame, but leaves a Bell pair; losses start after it
-    c = stim.Circuit("RX 0\nR 1 2\nCX[noiseless] 0 1\nISWAP[noiseless] 0 1\nISWAP_DAG[noiseless] 0 1\n"
-                     "CX 0 2\nTICK\nCX 1 2\nM 2\nMX 0 1")
-    rel = frame_css(c)                                   # default model: losses after noisy two-qubit gates
-    assert rel.proven and rel.prefix_end == 5
-    fam = loss_family(c, slots=loss_locations(c, LossModel()), n_random=30, seed=2)
-    assert check_reference(c, rel.reference, fam) == []
-    assert not frame_css(c, EVERY).proven                # the encoder itself may lose atoms
+def test_noiseless_operations_may_still_lose_atoms():
+    # a reload after the noiseless H S reads |0> as a random X readout, so the tag must not exempt the run
+    run = "H{t} 0\nS{t} 0\nS{t} 0\nH{t} 0\n"
+    tagged = frame_css(stim.Circuit("R 0\n" + run.format(t="[noiseless]") + "M 0"))
+    assert not tagged.proven and "reload of qubit 0" in tagged.reasons[0]
+    assert tagged.reasons == frame_css(stim.Circuit("R 0\n" + run.format(t="") + "M 0")).reasons
 
 
 def test_failing_reload_marker_is_a_loss_location_where_the_slot_may_be_empty():
@@ -179,27 +170,25 @@ def test_failing_reload_marker_is_a_loss_location_where_the_slot_may_be_empty():
     assert loss_locations(c, LossModel()) == [(2, 0), (2, 1), (3, 0), (3, 1)]
 
 
-@pytest.mark.parametrize("marker", ["I_ERROR[reload] 0\n", "I_ERROR[reload](0.5) 0\n"])
-def test_reload_markers(marker):
-    # gates H S S H (= X) then H S S H again: identity at the CX, but X halfway through
+def test_reload_anywhere_sees_a_frame_halfway_through_a_gate_run():
+    # H S S H (= X) twice is the identity, but a |0> reloaded after the first run reads 1 at the CX
     run = "H 0\nTICK\nS 0\nTICK\nS 0\nTICK\nH 0\nTICK\n"
-    base = "R 0 1\nRX 2\nCX 2 0\n" + run + "{mid}" + run + "{late}" + "CX 0 1\nM 0 1\nMX 2"
-    plain = stim.Circuit(base.format(mid="", late=""))
-    assert frame_css(plain).proven                        # no reload
-    rel = frame_css(plain, LossModel(reload="anywhere"))  # a reload where the gates so far are X reads 1 at the CX
+    rel = frame_css(stim.Circuit("R 0 1\nRX 2\nCX 2 0\n" + run + run + "CX 0 1\nM 0 1\nMX 2"))
     assert not rel.proven and "reload of qubit 0" in rel.reasons[0]
-    model = LossModel(after="any")
-    rel = frame_css(stim.Circuit(base.format(mid=marker, late="")), model)
-    assert rel.verdict == "not-frame-css"                 # the marker reloads |0> where the frame is X
-    late = stim.Circuit(base.format(mid="", late=marker))  # after both runs the frame is back to I
-    rel = frame_css(late, model)
+
+
+@pytest.mark.parametrize("marker", ["I_ERROR[reload] 0\n", "I_ERROR[reload](0.5) 0\n"])
+def test_loss_families_sample_reload_markers_exactly(marker):
+    c = stim.Circuit("R 0 1\nRX 2\nCX 2 0\n" + marker + "CX 0 1\nM 0 1\nMX 2")
+    rel = frame_css(c)
     assert rel.proven
-    always = stim.Circuit(base.format(mid="", late="I_ERROR[reload] 0\n"))   # family patterns fix each reload's outcome
-    fam = loss_family(late, slots=loss_locations(late, model), n_random=40, max_losses=3, seed=3)
-    k_marker = next(k for k, inst in enumerate(late) if mf.is_reload(inst))
+    model = LossModel(after="any")
+    always = stim.Circuit("R 0 1\nRX 2\nCX 2 0\nI_ERROR[reload] 0\nCX 0 1\nM 0 1\nMX 2")  # family patterns fix each reload's outcome
+    fam = loss_family(c, slots=loss_locations(c, model), n_random=40, max_losses=3, seed=3)
+    k_marker = next(k for k, inst in enumerate(c) if mf.is_reload(inst))
     assert any(k_marker in s for s in fam) == ("(" in marker)     # failures are tested where reloads can fail
     for i, s in enumerate(fam):
-        n = late.num_measurements + 100
+        n = c.num_measurements + 100
         a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference)
         b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s
@@ -215,42 +204,13 @@ def test_reload_markers(marker):
 ])
 def test_operations_outside_assumption_i_stop_early(text):
     c = stim.Circuit(text)
-    assert frame_css(c, EVERY).verdict == "outside-assumptions"
-    assert certify(c, EVERY).verdict == "outside-assumptions"
+    assert frame_css(c).verdict == "outside-assumptions"
+    assert certify(c, PESSIMISTIC).verdict == "outside-assumptions"
 
 
 def test_pauli_noise_is_inside_the_assumptions():
     c = stim.Circuit("R 0 1\nPAULI_CHANNEL_1(0.1, 0, 0) 0\nE(0.1) X0 Z1\nCX 0 1\nM 0 1")
-    assert frame_css(c, EVERY).verdict == "frame-css"
-
-
-def _noiseless(c):
-    out = stim.Circuit()
-    for inst in c:
-        out.append(stim.CircuitInstruction(inst.name, inst.targets_copy(), inst.gate_args_copy(), tag="noiseless"))
-    return out
-
-
-ANY = LossModel(after="any")
-
-
-def test_prefix_state_sets_the_free_second_axes():
-    # after the prefix both qubits use only their Z axis (CZ, M), so their second channels are free; the prefix
-    # state (stabilizers ZY, YZ) is CSS only if Y carries them: frames Y->X on qubit 0 and Y->Z on qubit 1
-    prep = stim.Tableau.from_stabilizers([stim.PauliString("ZY"), stim.PauliString("YZ")]).to_circuit("elimination")
-    c = _noiseless(prep) + stim.Circuit("I 0 1\nCZ 0 1\nM 0 1")
-    rel = frame_css(c, ANY)
-    assert rel.verdict == "frame-css"
-    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, ANY), pairs=True)) == []
-
-
-@pytest.mark.parametrize("readout", ["MX 1", "MY 1"])
-def test_prefix_entangles_qubits_no_later_gate_links(readout):
-    # a Bell pair whose halves are only read: two role components, and only one relative role choice works
-    c = _noiseless(stim.Circuit("H 0\nCX 0 1")) + stim.Circuit(f"I 0 1\nM 0\n{readout}")
-    rel = frame_css(c, ANY)
-    assert rel.verdict == "frame-css"
-    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, ANY), pairs=True)) == []
+    assert frame_css(c).verdict == "frame-css"
 
 
 def test_long_swap_chain_neither_recurses_nor_slows_down():
@@ -261,54 +221,8 @@ def test_long_swap_chain_neither_recurses_nor_slows_down():
         c.append("TICK")
         c.append("SWAP", [q + 1, q])
     c.append("M", list(range(n)))
-    rel = frame_css(c, ANY)
+    rel = frame_css(c)
     assert rel.verdict == "frame-css" and not rel.reference.any()
-
-
-RING5 = "H 0 1 2 3 4\nCZ 0 1 1 2 2 3 3 4 4 0\n"   # the 5-qubit ring graph state is CSS in no single-qubit frames
-
-
-def _read_after_prefix(prefix, n):
-    return _noiseless(stim.Circuit(prefix)) + stim.Circuit(f"I {' '.join(map(str, range(n)))}\nM {' '.join(map(str, range(n)))}")
-
-
-def test_prefix_choices_tried_exhaustively_give_an_exact_no():
-    rel = frame_css(_read_after_prefix(RING5, 5), ANY)
-    assert rel.verdict == "not-frame-css" and "all 512" in rel.reasons[0]
-
-
-def test_prefix_with_too_many_open_choices_is_outside_the_assumptions(monkeypatch):
-    import sys
-    monkeypatch.setattr(sys.modules["ellis.certify.frame_css"], "PREFIX_CHOICES", 256)
-    ghz = "H 5\nCX " + " ".join(f"5 {q}" for q in range(6, 13)) + "\n"
-    c = _read_after_prefix(RING5 + ghz, 13)
-    assert frame_css(c, ANY).verdict == "outside-assumptions"
-    assert certify(c, ANY).verdict == "outside-assumptions"
-
-
-def test_prefix_cannot_end_inside_an_instruction_that_repeats_a_qubit():
-    # Stim fuses the two SWAP lines; a loss may follow the first SWAP, so the prefix cannot hold both
-    fused = stim.Circuit("RX 0 1\nS 0\nS 0\nSWAP 1 0\nSWAP 1 0\nMX 0 1")
-    assert frame_css(fused).verdict == "outside-assumptions"
-    split = stim.Circuit("RX 0 1\nS 0\nS 0\nSWAP 1 0\nTICK\nSWAP 1 0\nMX 0 1")
-    assert frame_css(split).verdict == "not-frame-css"
-
-
-def test_prefix_reset_of_an_entangled_qubit_is_a_partial_trace():
-    # resetting half of a Bell pair must not pick a random branch for the other half
-    c = stim.Circuit("R 0 1\nH 0\nCX[noiseless] 0 1\nR[noiseless] 1\nM[noiseless] 0\nCX 0 1\nM 0 1")
-    model = LossModel()
-    verdicts = {(r.verdict, tuple(r.reference.tolist())) for r in (frame_css(c, model) for _ in range(20))}
-    assert len(verdicts) == 1 and next(iter(verdicts))[0] == "frame-css"
-    rel = frame_css(c, model)
-    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, model), pairs=True)) == []
-
-
-def test_prefix_generators_keep_their_signs():
-    # the prefix leaves -X1 Z3 and +Z1 X3 (S S = Z flips the first); the SWAP ties both qubits into one group,
-    # and frames exist only if the minus sign is seen (found by the oracle suite)
-    c = stim.Circuit("H[noiseless] 1\nCX[noiseless] 1 3\nS[noiseless] 1 1\nH 3\nSQRT_Y_DAG 3\nH 1\nSQRT_Y 1\nSWAP 3 1")
-    assert frame_css(c, ANY).verdict == "frame-css"
 
 
 @pytest.mark.parametrize("reset", ["MR", "MRX", "MRY"])
@@ -321,43 +235,20 @@ def test_constraints_read_fused_measure_resets_in_order(reset):
     assert [(y, v) for y, v in constraints(c, {})] == [(0b10, 0)]
 
 
-def test_a_reload_that_may_fail_empties_the_slot_again():
-    # the certain reload fills the slot; the uncertain one may fail, a loss location, so the reloads anywhere after
-    # it must hold in the frames C_NZYX, S C_NZYX, ... which no frame allows (found by the oracle sweep)
-    c = stim.Circuit("XCX 1 0\nI_ERROR[reload] 0\nI_ERROR[reload](0.5) 0\nC_NZYX 0\nS 0\nC_XYNZ 0")
-    assert frame_css(c, LossModel(reload="anywhere")).verdict == "not-frame-css"
-
-
 def test_reloads_anywhere_land_between_fused_gates():
     # SQRT_X 0 0 0 0 is four gates (identity overall); a qubit lost after the second and reloaded in |0> reads 1
     c = stim.Circuit("R 1\nSQRT_X 0 0 0 0\nM 0 1")
     assert len(c) == 3, "premise: Stim fused the four gates into one instruction"
-    assert frame_css(c, LossModel(after="any", reload="anywhere")).verdict == "not-frame-css"
-    assert frame_css(c, ANY).verdict == "frame-css"
+    assert frame_css(c).verdict == "not-frame-css"
 
 
-def test_prefix_choice_count_does_not_wrap(monkeypatch):
-    # 70 kept qubits, each read alone: 2^139 open combinations, which wraps to 0 in int64
-    import sys
-    monkeypatch.setattr(sys.modules["ellis.certify.frame_css"], "PREFIX_CHOICES", 16)
-    ghz = "H 5\nCX " + " ".join(f"5 {q}" for q in range(6, 70)) + "\n"
-    rel = frame_css(_read_after_prefix(RING5 + ghz, 70), ANY)
-    assert rel.verdict == "outside-assumptions"
-
-
-def test_fused_gates_after_the_prefix_keep_a_valid_reference():
-    # losses only between instructions, but a certificate does not depend on loss timing after the prefix:
-    # kappa of the fused circuit also holds when a loss may fall between the two CX gates
+def test_fused_gates_keep_a_valid_reference():
+    # losses only between instructions, but kappa of the fused circuit also holds when a loss may fall between
+    # the two CX gates
     fused = stim.Circuit("R 0 1 2\nH 0\nCX 0 1 1 2\nH 0\nM 0 1 2")
     split = stim.Circuit("R 0 1 2\nH 0\nCX 0 1\nTICK\nCX 1 2\nH 0\nM 0 1 2")
     assert len(fused) == 5, "premise: the dependent CX gates share one instruction"
-    rel = frame_css(fused, ANY)
-    assert rel.verdict == frame_css(split, ANY).verdict == "frame-css"
-    fam = loss_family(split, slots=loss_locations(split, ANY), pairs=True)
+    rel = frame_css(fused)
+    assert rel.verdict == frame_css(split).verdict == "frame-css"
+    fam = loss_family(split, slots=loss_locations(split, PESSIMISTIC), pairs=True)
     assert check_reference(split, rel.reference, fam) == []
-
-
-def test_circuit_without_loss_locations_is_all_prefix():
-    # no two-qubit gate, so no loss can happen under 2q: the fused last instruction does not end a prefix
-    c = stim.Circuit("RX 0\nMX 0\nSQRT_Y 0 0")
-    assert frame_css(c, LossModel(reload="anywhere")).verdict == "frame-css"

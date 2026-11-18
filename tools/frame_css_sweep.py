@@ -1,10 +1,11 @@
 """frame_css against the independent oracles at scale: one JSON line per disagreement, then one summary line.
 
-Each task takes one loss model and one seed and checks the corpus of tests/python/test_frame_css_oracle.py
-(random Clifford circuits, constructive frame-CSS circuits, and their single-edit near misses):
-  P1  an accepted kappa is a possible record of every lossy circuit tried;
+Each task takes one loss model and one seed and checks the pessimistic corpus of
+tests/python/test_frame_css_oracle.py (random Clifford circuits, constructive frame-CSS circuits, and their
+single-edit near misses).  frame_css always proves under PESSIMISTIC; the task's model is the one P1 checks:
+  P1  an accepted kappa is a possible record of every lossy circuit of the task's model tried;
   P2  a constructive circuit is accepted;
-  P3  the verdict equals the brute-force frame search (unless frame_css says outside-assumptions).
+  P3  the verdict equals the brute-force frame search under PESSIMISTIC (unless outside-assumptions).
 
     python tools/frame_css_sweep.py --seeds 200 --workers 16 --out sweep.jsonl
 """
@@ -23,17 +24,18 @@ import test_frame_css_oracle as T  # noqa: E402
 from ellis.certify import frame_css  # noqa: E402
 
 EXACT_O2 = {"zero"}
+MODELS = {**T.MODELS, **T.WEAKER}
 
 
 def check(name: str, seed: int, n_random: int, per_set: int) -> tuple[Counter, list]:
-    model, rng = T.MODELS[name], T.seed("sweep", name, seed)
+    model, rng = MODELS[name], T.seed("sweep", name, seed)
     counts, bad = Counter(), []
-    for src, c in T.corpus(rng, model, n_random=n_random, per_set=per_set):
-        res = frame_css(c, model)
+    for src, c in T.corpus(rng, T.PESSIMISTIC, n_random=n_random, per_set=per_set):
+        res = frame_css(c)
         counts[res.verdict] += 1
         if res.verdict == "outside-assumptions":
             continue
-        want = T.oracle(c, model)
+        want = T.oracle(c, T.PESSIMISTIC)
         counts[f"oracle {want}"] += 1
         if res.verdict != want:
             bad.append(dict(prop="P3", model=name, seed=seed, src=src, ellis=res.verdict, oracle=want, circuit=str(c)))
@@ -60,7 +62,7 @@ def main():
     args = parser.parse_args()
     total, n_bad = Counter(), 0
     with args.out.open("w") as out, ProcessPoolExecutor(args.workers) as pool:
-        tasks = [pool.submit(check, name, s, args.n_random, args.per_set) for name in T.MODELS for s in range(args.seeds)]
+        tasks = [pool.submit(check, name, s, args.n_random, args.per_set) for name in MODELS for s in range(args.seeds)]
         for task in as_completed(tasks):
             counts, bad = task.result()
             total.update(counts)
