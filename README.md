@@ -8,7 +8,9 @@ tableau reference.
   Stim's `FrameSimulator`. A lost qubit drops its later gates, and its readouts become fair coins.
 - **Common-reference certificates.** `ellis.certify` proves that one reference is exact for every loss
   pattern (frame-CSS relabelling, closed S/CZ blocks), or returns a signed-parity contradiction that
-  shows no such reference exists.
+  shows no such reference exists. `frame_css` decides frame-CSS exactly; a circuit outside the
+  assumptions that make the decision exact (classical feedback, multi-qubit measurements, a prefix with
+  too many open frame choices) gets verdict `"outside-assumptions"` instead.
 - **MSC S-proxy references.** `ellis.msc.reference.CultivationReference` computes a reference for each loss pattern
   from a small prefix tableau and a CSS gauge sweep, and falls back to the full tableau when its checks
   fail.
