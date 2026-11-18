@@ -263,3 +263,24 @@ def test_long_swap_chain_neither_recurses_nor_slows_down():
     c.append("M", list(range(n)))
     rel = frame_css(c, ANY)
     assert rel.verdict == "frame-css" and not rel.reference.any()
+
+
+RING5 = "H 0 1 2 3 4\nCZ 0 1 1 2 2 3 3 4 4 0\n"   # the 5-qubit ring graph state is CSS in no single-qubit frames
+
+
+def _read_after_prefix(prefix, n):
+    return _noiseless(stim.Circuit(prefix)) + stim.Circuit(f"I {' '.join(map(str, range(n)))}\nM {' '.join(map(str, range(n)))}")
+
+
+def test_prefix_choices_tried_exhaustively_give_an_exact_no():
+    rel = frame_css(_read_after_prefix(RING5, 5), ANY)
+    assert rel.verdict == "not-frame-css" and "all 512" in rel.reasons[0]
+
+
+def test_prefix_with_too_many_open_choices_is_outside_the_assumptions(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys.modules["ellis.certify.frame_css"], "PREFIX_CHOICES", 256)
+    ghz = "H 5\nCX " + " ".join(f"5 {q}" for q in range(6, 13)) + "\n"
+    c = _read_after_prefix(RING5 + ghz, 13)
+    assert frame_css(c, ANY).verdict == "outside-assumptions"
+    assert certify(c, ANY).verdict == "outside-assumptions"
