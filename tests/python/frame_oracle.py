@@ -194,10 +194,52 @@ def _reference_circuit(flat: stim.Circuit) -> stim.Circuit:
     return out
 
 
+class _Discarding:
+    """A TableauSimulator whose resets discard exactly: the old state moves into a fresh ancilla that nothing
+    touches again (a partial trace), instead of Stim's reset, which measures and so collapses entangled partners
+    onto a random branch."""
+
+    def __init__(self, n: int):
+        self.sim = stim.TableauSimulator()
+        self.sim.set_num_qubits(n)
+        self.spare = itertools.count(n)
+
+    def prepare(self, q: int, state: str):
+        """Discard q and put it in the + eigenstate of `state` ("X", "Y", "Z") or maximally mixed ("mixed")."""
+        sim = self.sim
+        sim.swap(q, next(self.spare))
+        if state in "XY":
+            sim.h(q)
+        if state == "Y":
+            sim.s(q)
+        if state == "mixed":
+            a = next(self.spare)
+            sim.h(a)
+            sim.cnot(a, q)
+
+    def postselect(self, basis: str, q: int, value: bool) -> bool:
+        try:
+            {"X": self.sim.postselect_x, "Y": self.sim.postselect_y, "Z": self.sim.postselect_z}[basis](
+                q, desired_value=value)
+            return True
+        except ValueError:
+            return False
+
+    def stabilizers(self, n: int):
+        """Generators of the (possibly mixed) state of qubits 0..n-1."""
+        sim = self.sim
+        out = []
+        for g in restrict(sim.canonical_stabilizers(), range(n), sim.num_qubits):
+            t = g[:n]
+            t.sign = g.sign
+            out.append(t)
+        return out
+
+
 def _prefix_state(flat: stim.Circuit, k0: int, reference: np.ndarray) -> list:
     """Stabilizer generators of the state after instructions 0..k0, on the branch that reads the reference."""
-    sim = stim.TableauSimulator()
-    sim.set_num_qubits(flat.num_qubits)
+    n = flat.num_qubits
+    sim = _Discarding(n)
     m = 0
     for inst in flat[: k0 + 1]:
         if inst.name == "MPAD":
@@ -205,14 +247,16 @@ def _prefix_state(flat: stim.Circuit, k0: int, reference: np.ndarray) -> list:
         elif inst.name in MEAS_BASIS:
             basis = MEAS_BASIS[inst.name]
             for t in inst.targets_copy():
-                post = {"X": sim.postselect_x, "Y": sim.postselect_y, "Z": sim.postselect_z}[basis]
-                post(t.value, desired_value=bool(reference[m]) ^ t.is_inverted_result_target)
+                assert sim.postselect(basis, t.value, bool(reference[m]) ^ t.is_inverted_result_target)
                 m += 1
                 if inst.name.startswith("MR"):
-                    {"X": sim.reset_x, "Y": sim.reset_y, "Z": sim.reset_z}[basis](t.value)
+                    sim.prepare(t.value, basis)
+        elif inst.name in RESET_BASIS:
+            for t in inst.targets_copy():
+                sim.prepare(t.value, RESET_BASIS[inst.name])
         elif inst.name not in INERT:
-            sim.do(inst)
-    return sim.canonical_stabilizers()
+            sim.sim.do(inst)
+    return sim.stabilizers(n)
 
 
 def _may_be_lost(flat, model: LossModel, locs):
@@ -274,7 +318,7 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
             reloads.append((cur[q], acc[q], next(clock), f"reload of qubit {q} before instruction {k}"))
 
     p.post_cut = [new_segment(q) for q in range(n)]
-    m = 0
+    m = flat[: k0 + 1].num_measurements
     for k in range(k0 + 1, N):
         inst = flat[k]
         name, targets = inst.name, inst.targets_copy()
@@ -307,8 +351,8 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
                 if name.startswith("MR"):
                     require(s, ID, lambda f, b=basis: prep_ok(f, b), f"reset of qubit {q} after its readout at {k}")
                 else:
-                    sup = [mask(lambda g, fa=MUL[a][f]: reads_channel(fa, basis) and reads_channel(g, basis)
-                                and LOCAL[g][basis][0] == LOCAL[fa][basis][0]) for f in range(24)]
+                    sup = [mask(lambda g, fa=MUL[a][f], b=basis: reads_channel(fa, b) and reads_channel(g, b)
+                                and LOCAL[g][b][0] == LOCAL[fa][b][0]) for f in range(24)]
                     binary.append((old, s, sup, f"sign kept by qubit {q} after its readout at {k}"))
         else:
             gp = good_pairs(name)
@@ -328,7 +372,7 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
     p.into = [[] for _ in domains]
     for x, y, sup, why in binary:
         p.into[y].append((x, sup))
-        p.into[x].append((y, [mask(lambda f, g=g: (sup[f] >> g) & 1) for g in range(24)]))
+        p.into[x].append((y, [mask(lambda f, g=g, s=sup: (s[f] >> g) & 1) for g in range(24)]))
         reasons.append(why)
     p.reasons = reasons
     p.prefix = [(q, p.post_cut[q]) for q in range(n) if last_use[p.post_cut[q]] >= 0]
@@ -374,9 +418,9 @@ def solve(p: FrameProblem):
                 d = dom.copy()
                 d[seg] = 1 << f
                 frames = {q: next(_bits(d[s])) for q, s in p.prefix[: i + 1]}
-                if positive_css(to_local(groups[i], frames, n), n) and _propagate(d, p.into, [seg]):
-                    if (r := search(d, i + 1)) is not None:
-                        return r
+                if (positive_css(to_local(groups[i], frames, n), n) and _propagate(d, p.into, [seg])
+                        and (r := search(d, i + 1)) is not None):
+                    return r
             return None
         free = [s for s in range(len(dom)) if dom[s] & (dom[s] - 1) and p.into[s]]
         if not free:
@@ -439,9 +483,10 @@ def prefix_spans(circuit: stim.Circuit, model: LossModel) -> tuple[bool, bool]:
 
 
 # ------------------------------------------------------------------ O2: common reference
-def loss_patterns(circuit: stim.Circuit, model: LossModel, cap: int = 1 << 12, n_random: int = 100, seed: int = 0):
-    """Every subset of the loss locations when there are at most `cap`; else no loss, every single and double
-    loss, and `loss_family`'s random multi-loss patterns."""
+def loss_patterns(circuit: stim.Circuit, model: LossModel, cap: int = 1 << 12, n_random: int = 100,
+                  n_pairs: int | None = None, seed: int = 0):
+    """Every subset of the loss locations when there are at most `cap`; else no loss, every single loss, the
+    pairs of losses (all, or `n_pairs` random ones) and `loss_family`'s random multi-loss patterns."""
     flat = circuit.flattened()
     locs = loss_locations(flat, model)
 
@@ -453,8 +498,12 @@ def loss_patterns(circuit: stim.Circuit, model: LossModel, cap: int = 1 << 12, n
 
     if 1 << len(locs) <= cap:
         return [pattern(c) for r in range(len(locs) + 1) for c in itertools.combinations(locs, r)]
-    fam = loss_family(flat, reload=model.reload == "reset", slots=locs, n_random=n_random, seed=seed)
-    return [{}] + [pattern([s]) for s in locs] + [pattern(c) for c in itertools.combinations(locs, 2)] + fam
+    pairs = list(itertools.combinations(locs, 2))
+    if n_pairs is not None and n_pairs < len(pairs):
+        rng = np.random.default_rng(seed)
+        pairs = [pairs[int(i)] for i in rng.choice(len(pairs), n_pairs, replace=False)]
+    fam = loss_family(flat, reload=model.reload == "reset", slots=locs, n_random=n_random, seed=seed) if n_random else []
+    return [{}] + [pattern([s]) for s in locs] + [pattern(c) for c in pairs] + fam
 
 
 def common_reference_failures(circuit: stim.Circuit, model: LossModel, kappa, patterns) -> list:
@@ -467,7 +516,86 @@ def common_reference_failures(circuit: stim.Circuit, model: LossModel, kappa, pa
     return [s for s in patterns if any(((y & r).bit_count() & 1) != v for y, v in constraints(circuit, s, reload))]
 
 
+
+def reads_reference(circuit: stim.Circuit, model: LossModel, kappa, losses: dict, reloads: dict | None = None) -> bool:
+    """kappa is a possible noiseless record of the lossy circuit, simulated directly (independent of
+    `constraints`): losses {k: qubits lost right after instruction k, -1 before the start}; reloads {k: qubits
+    refilled just before instruction k (k = len: at the end)}, only meaningful with reload="anywhere".  A refill
+    (a reload marker, a reset with reload="reset", or a boundary reload) puts |0>, or with reload_state="mixed" a
+    maximally mixed atom, into an empty slot; a lost readout is a free coin."""
+    flat = circuit.flattened()
+    sim = _Discarding(flat.num_qubits)
+    lost = set(losses.get(-1, ()))
+    reloads = reloads or {}
+
+    def refill(q: int):
+        if q in lost:
+            lost.discard(q)
+            sim.prepare(q, "Z" if model.reload_state == "zero" else "mixed")
+
+    m = 0
+    for k, inst in enumerate(flat):
+        for q in reloads.get(k, ()):
+            refill(q)
+        name, targets = inst.name, inst.targets_copy()
+        if is_reload(inst):
+            for t in targets:
+                refill(t.value)
+        elif name == "MPAD":
+            for t in targets:
+                if bool(kappa[m]) != bool(t.value):
+                    return False
+                m += 1
+        elif name in MEAS_BASIS or name in RESET_BASIS:
+            basis = MEAS_BASIS.get(name) or RESET_BASIS[name]
+            for t in targets:
+                q = t.value
+                if name in MEAS_BASIS:
+                    if q not in lost and not sim.postselect(basis, q, bool(kappa[m]) ^ t.is_inverted_result_target):
+                        return False
+                    m += 1
+                if name in RESET_BASIS or name.startswith("MR"):
+                    if model.reload == "reset":
+                        refill(q)
+                    if q not in lost:
+                        sim.prepare(q, basis)
+        elif name not in INERT:
+            w = 2 if name in TWO_Q else 1
+            qs = [t.value for t in targets]
+            for i in range(0, len(qs), w):
+                if not set(qs[i:i + w]) & lost:
+                    sim.sim.do(stim.CircuitInstruction(name, qs[i:i + w]))
+        lost |= set(losses.get(k, ()))
+    return True
+
+
+def random_events(circuit: stim.Circuit, model: LossModel, rng, max_losses: int = 3):
+    """A random loss pattern of the model (a few of its loss locations), plus random boundary reloads when
+    reload="anywhere"."""
+    flat = circuit.flattened()
+    locs = loss_locations(flat, model)
+    losses, reloads = {}, {}
+    for i in rng.permutation(len(locs))[: int(rng.integers(0, max_losses + 1))]:
+        k, q = locs[int(i)]
+        losses.setdefault(k, []).append(q)
+    if model.reload == "anywhere" and flat.num_qubits:
+        for _ in range(int(rng.integers(0, max_losses + 1))):
+            reloads.setdefault(int(rng.integers(0, len(flat) + 1)), []).append(int(rng.integers(flat.num_qubits)))
+    return losses, reloads
+
+
+def simulated_failures(circuit: stim.Circuit, model: LossModel, kappa, rng, n_patterns: int = 50) -> list:
+    """O2 by direct simulation for every loss model, reload="anywhere" and reload_state="mixed" included: the
+    random event patterns (losses, reloads) under which kappa is not a possible noiseless record."""
+    out = []
+    for _ in range(n_patterns):
+        losses, reloads = random_events(circuit, model, rng)
+        if not reads_reference(circuit, model, kappa, losses, reloads):
+            out.append((losses, reloads))
+    return out
+
 # ------------------------------------------------------------------ O3: circuits
+DEFAULT_MODEL = LossModel()
 MOVERS = tuple(g for g in ONE_Q if g not in PAULI_GATES and g != "I")   # Pauli gates leave the analysed frame alone
 
 
@@ -574,7 +702,7 @@ def _is_loss_location(model: LossModel, name: str, tag: str) -> bool:
     return name not in PAULI_NOISE and name not in ANNOTATIONS and name != "MPAD"
 
 
-def random_frame_css(rng, n_qubits: int, depth: int, gate_set: str = "css", model: LossModel = LossModel(),
+def random_frame_css(rng, n_qubits: int, depth: int, gate_set: str = "css", model: LossModel = DEFAULT_MODEL,
                      prefix: str = "resets", extras: bool = True) -> stim.Circuit:
     """O3: a circuit that is frame-CSS under `model` by construction.  The generator keeps one frame per qubit
     and, before every operation, inserts the single-qubit gates that put the frames where the rules hold.
@@ -803,7 +931,8 @@ def _map_target(t, perm):
 
 def rewrites(circuit: stim.Circuit, rng, model: LossModel):
     """Rewrites that keep the frame-CSS verdict under `model`: {kind: circuit}.  relabel (permute qubits),
-    pair (H H in one instruction, S then S_DAG, or X then X, right after an operation on the qubit), split
+    pair (H H in one instruction, S then S_DAG, or X then X, right after an operation on the qubit; with reloads
+    anywhere only pairs that commute with Z, since a reload may land between the two gates), split
     (an instruction on pairwise-disjoint qubits into two), fuse (two such instructions separated by a TICK into
     one), inert (a TICK, DETECTOR or Pauli noise channel).  Edits stay after the prefix end, so the prefix, the
     loss locations up to ghost equivalence and the frames at the reload points are kept."""
@@ -814,8 +943,8 @@ def rewrites(circuit: stim.Circuit, rng, model: LossModel):
     perm = [int(q) for q in rng.permutation(n + 2)[:n]]
     relabeled = stim.Circuit()
     for inst in flat:
-        relabeled.append(inst.name, [_map_target(t, perm) for t in inst.targets_copy()], inst.gate_args_copy(),
-                         tag=inst.tag)
+        ts = inst.targets_copy() if inst.name == "MPAD" else [_map_target(t, perm) for t in inst.targets_copy()]
+        relabeled.append(inst.name, ts, inst.gate_args_copy(), tag=inst.tag)
     out["relabel"] = relabeled
 
     ops = [k for k in range(k0 + 1, N) if flat[k].name not in INERT and flat[k].name != "MPAD"
@@ -823,7 +952,10 @@ def rewrites(circuit: stim.Circuit, rng, model: LossModel):
     if ops:
         k = int(rng.choice(ops))
         q = int(rng.choice([t.value for t in flat[k].targets_copy()]))
-        pair = str(rng.choice([f"H {q} {q}", f"S {q}\nTICK\nS_DAG {q}", f"X {q}\nTICK\nX {q}"]))
+        pairs = [f"H {q} {q}", f"S {q}\nTICK\nS_DAG {q}", f"X {q}\nTICK\nX {q}"]
+        if model.reload == "anywhere" and model.reload_state == "zero":
+            pairs = [f"S {q}\nTICK\nS_DAG {q}", f"Z {q} {q}"]    # a reload may land between the two gates
+        pair = str(rng.choice(pairs))
         out["pair"] = _insert(flat, k + 1, pair)
 
     def groups(inst):
@@ -856,7 +988,39 @@ def rewrites(circuit: stim.Circuit, rng, model: LossModel):
         p = int(rng.integers(0, N + 1))
         q = int(rng.integers(n))
         m = flat[:p].num_measurements
-        inert = [f"TICK", f"X_ERROR(0.1) {q}", f"DEPOLARIZE1(0.01) {q}", f"PAULI_CHANNEL_1(0.01, 0.02, 0.03) {q}",
-                 f"E(0.1) X{q}"] + ([f"DETECTOR rec[-1]"] if m else [])
+        inert = ["TICK", f"X_ERROR(0.1) {q}", f"DEPOLARIZE1(0.01) {q}", f"PAULI_CHANNEL_1(0.01, 0.02, 0.03) {q}",
+                 f"E(0.1) X{q}"] + (["DETECTOR rec[-1]"] if m else [])
         out["inert"] = _insert(flat, p, str(rng.choice(inert)))
     return out
+
+
+def minimize(circuit: stim.Circuit, still_fails) -> stim.Circuit:
+    """Greedy shrink: drop whole instructions, then single gates of multi-target instructions, while
+    still_fails(circuit) holds (an exception counts as not failing)."""
+
+    def fails(c):
+        try:
+            return still_fails(c)
+        except (ValueError, IndexError, AssertionError):
+            return False
+
+    cur = circuit.flattened()
+    changed = True
+    while changed:
+        changed = False
+        for k in range(len(cur) - 1, -1, -1):
+            trial = cur[:k] + cur[k + 1:]
+            if fails(trial):
+                cur, changed = trial, True
+        for k in range(len(cur) - 1, -1, -1):
+            inst = cur[k]
+            w = 2 if stim.gate_data(inst.name).is_two_qubit_gate else 1
+            ts = inst.targets_copy()
+            for i in range(len(ts) - w, -1, -w) if len(ts) > w else ():
+                trial = joined(cur[:k], _instruction(inst, ts[:i] + ts[i + w:]), cur[k + 1:])
+                if fails(trial):
+                    cur, changed = trial, True
+                    break
+            if changed:
+                break
+    return cur
