@@ -216,6 +216,13 @@ def frame_css(circuit: stim.Circuit, model: LossModel = LossModel()) -> FrameCSS
     return res
 
 
+def _frame_free(inst) -> bool:
+    """Annotations, noise, Pauli and identity gates: no frame changes and no loss-relevant timing."""
+    gd = stim.gate_data(inst.name)
+    return (inst.name in mf.ANNOTATIONS or inst.name in mf.PAULI or inst.name in ("I", "II")
+            or (gd.is_noisy_gate and not gd.produces_measurements))
+
+
 def _check_operations(flat):
     """Assumption (i): single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates, Pauli
     noise and annotations, with no classically controlled operation."""
@@ -236,10 +243,11 @@ def _certify(flat, model, res):
     k0 = min((k for k, _ in locations), default=len(ops) - 1)
     res.prefix_end = k0
     # Losses happen between instructions, which is the same as after each gate unless a qubit repeats inside one
-    # instruction.  Only the prefix end depends on the timing (frames and the theorem do not), so only the
-    # instruction that ends the prefix must not repeat a qubit.
+    # instruction.  A certificate depends on loss timing only through the prefix end and the reload points, and
+    # reloads are checked after every gate below, so only the instruction that ends the prefix must not repeat a
+    # qubit.
     end = ops[k0] if k0 >= 0 else None
-    if end is not None and (end.name in mf.UNITARY_2Q or end.name in mf.MEAS):
+    if end is not None and not _frame_free(end):
         qs = [t.value for t in end.targets_copy()]
         if len(set(qs)) < len(qs):
             raise _Outside(f"assumption (ii): the first loss can follow instruction {k0} `{end}`, which acts on a qubit "
@@ -290,6 +298,7 @@ def _certify(flat, model, res):
         inst = ops[k]
         name, gd, targets = inst.name, stim.gate_data(inst.name), inst.targets_copy()
         qs = [t.value for t in targets]
+        lossy = set(after.get(k, ()))                       # a loss may follow each of this instruction's gates
         if name == "MPAD":
             for t in targets:
                 kappa[m] = bool(t.value)
@@ -300,21 +309,25 @@ def _certify(flat, model, res):
                 reload_point(q, k, marked=True)
                 if certain:                                 # the slot is full until the qubit's next loss location
                     may_be_lost.discard(q)
-        elif name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
+        elif _frame_free(inst):
             pass
         elif name in mf.UNITARY_1Q:
             g = stim.Tableau.from_named_gate(name)
             for q in qs:
                 A[q] = g * A[q]
+                if q in lossy:
+                    may_be_lost.add(q)
                 reload_point(q, k)
         elif name in mf.RESET:
             for q in qs:
                 s = new_seg(q, k, "reset")
                 uses.append((s, I1, mf.RESET[name], f"reset at instruction {k}"))
                 checks.append(Prep(s, I1, mf.RESET[name], 1, k, q, False))
-                reload_point(q, k)
-                if model.reload == "reset":
+                if model.reload == "reset":                 # the reset reloads an empty slot
                     may_be_lost.discard(q)
+                if q in lossy:
+                    may_be_lost.add(q)
+                reload_point(q, k)
         elif name in mf.MEAS:
             ax = mf.MEAS[name]
             for t in targets:
@@ -330,9 +343,11 @@ def _certify(flat, model, res):
                     checks.append(Prep(s, I1, ax, 1, k, q, False))
                 else:                               # the readout leaves its eigenstate; sign = the record
                     checks.append(Link(old, A_old, s, ax, k, q))
-                reload_point(q, k)
                 if name.startswith("MR") and model.reload == "reset":
                     may_be_lost.discard(q)
+                if q in lossy:
+                    may_be_lost.add(q)
+                reload_point(q, k)
         elif name in mf.UNITARY_2Q:
             shape = SHAPES[name]
             for a, b in zip(qs[::2], qs[1::2]):

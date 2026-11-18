@@ -326,3 +326,32 @@ def test_a_reload_that_may_fail_empties_the_slot_again():
     # it must hold in the frames C_NZYX, S C_NZYX, ... which no frame allows (found by the oracle sweep)
     c = stim.Circuit("XCX 1 0\nI_ERROR[reload] 0\nI_ERROR[reload](0.5) 0\nC_NZYX 0\nS 0\nC_XYNZ 0")
     assert frame_css(c, LossModel(reload="anywhere")).verdict == "not-frame-css"
+
+
+def test_reloads_anywhere_land_between_fused_gates():
+    # SQRT_X 0 0 0 0 is four gates (identity overall); a qubit lost after the second and reloaded in |0> reads 1
+    c = stim.Circuit("R 1\nSQRT_X 0 0 0 0\nM 0 1")
+    assert len(c) == 3, "premise: Stim fused the four gates into one instruction"
+    assert frame_css(c, LossModel(after="any", reload="anywhere")).verdict == "not-frame-css"
+    assert frame_css(c, ANY).verdict == "frame-css"
+
+
+def test_prefix_choice_count_does_not_wrap(monkeypatch):
+    # 70 kept qubits, each read alone: 2^139 open combinations, which wraps to 0 in int64
+    import sys
+    monkeypatch.setattr(sys.modules["ellis.certify.frame_css"], "PREFIX_CHOICES", 16)
+    ghz = "H 5\nCX " + " ".join(f"5 {q}" for q in range(6, 70)) + "\n"
+    rel = frame_css(_read_after_prefix(RING5 + ghz, 70), ANY)
+    assert rel.verdict == "outside-assumptions"
+
+
+def test_fused_gates_after_the_prefix_keep_a_valid_reference():
+    # losses only between instructions, but a certificate does not depend on loss timing after the prefix:
+    # kappa of the fused circuit also holds when a loss may fall between the two CX gates
+    fused = stim.Circuit("R 0 1 2\nH 0\nCX 0 1 1 2\nH 0\nM 0 1 2")
+    split = stim.Circuit("R 0 1 2\nH 0\nCX 0 1\nTICK\nCX 1 2\nH 0\nM 0 1 2")
+    assert len(fused) == 5, "premise: the dependent CX gates share one instruction"
+    rel = frame_css(fused, ANY)
+    assert rel.verdict == frame_css(split, ANY).verdict == "frame-css"
+    fam = loss_family(split, slots=loss_locations(split, ANY), pairs=True)
+    assert check_reference(split, rel.reference, fam) == []
