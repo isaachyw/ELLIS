@@ -637,7 +637,7 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
     keep = []
     for q in range(n):
         for P in "XYZ":
-            e = sim.peek_observable_expectation(stim.PauliString("_" * q + P))
+            e = getattr(sim, "peek_" + P.lower())(q)
             if e:
                 if cut[q] in used:
                     uses.append((cut[q], I1, P, f"prefix output state of qubit {q}"))
