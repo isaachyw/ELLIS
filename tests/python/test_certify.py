@@ -302,3 +302,10 @@ def test_prefix_reset_of_an_entangled_qubit_is_a_partial_trace():
     assert len(verdicts) == 1 and next(iter(verdicts))[0] == "frame-css"
     rel = frame_css(c, model)
     assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, model), pairs=True)) == []
+
+
+def test_prefix_generators_keep_their_signs():
+    # the prefix leaves -X1 Z3 and +Z1 X3 (S S = Z flips the first); the SWAP ties both qubits into one group,
+    # and frames exist only if the minus sign is seen (found by the oracle suite)
+    c = stim.Circuit("H[noiseless] 1\nCX[noiseless] 1 3\nS[noiseless] 1 1\nH 3\nSQRT_Y_DAG 3\nH 1\nSQRT_Y 1\nSWAP 3 1")
+    assert frame_css(c, ANY).verdict == "frame-css"

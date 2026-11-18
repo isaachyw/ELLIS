@@ -683,7 +683,7 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
         p = stim.PauliString(spare)
         for i in np.flatnonzero(c):
             p *= stabs[i]
-        out.append(p[:n])
+        out.append(p[:n] * p.sign)                      # slicing a PauliString drops its sign
     return keep, out
 
 
