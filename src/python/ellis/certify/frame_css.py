@@ -29,15 +29,19 @@ readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
 Scope.  The decision below is exact (it accepts exactly the frame-CSS circuits) under the paper's assumptions:
 (i) the operations are single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates and Pauli
-noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) no stabilizer of the prefix output
-spans two role components.  A circuit that breaks (i) or (iii) gets verdict "outside-assumptions".
+noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) the prefix output state is generated
+by stabilizers that each act within one role component, and every qubit it leaves entangled later uses two Pauli
+axes.  Under (iii) the rest of the circuit fixes every frame up to Pauli parts and harmless role flips, so one
+candidate decides.  Outside (iii) every remaining choice (a role flip per component, a free second axis per loose
+qubit) is tried, so the answer stays exact, unless there are more than PREFIX_CHOICES candidates: then the
+verdict is "outside-assumptions".  A circuit that breaks (i) gets "outside-assumptions" before any stage runs.
 
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
     controlled (CX, CY, CZ, XC*, YC*: its two axes carry opposite channels), permutation (SWAP, CXSWAP,
     SWAPCX: one frame determines the other), or never CSS (ISWAP, SQRT_XX, CZSWAP, ...);
   * a weighted union-find joins the segments a permutation gate ties; each group may use two axes;
-  * a parity union-find assigns the channel roles; free role flips are tried against the prefix state;
+  * a parity union-find assigns the channel roles; the prefix state is checked in the frames this leaves;
   * one GF(2) system over the frames' Pauli parts (two bits per group) sets the signs.
 """
 import itertools
@@ -55,6 +59,7 @@ REPS = [stim.Tableau.from_named_gate(g) for g in ("I", "H", "S", "SQRT_X_DAG", "
 PAULI_PART = [stim.Tableau.from_named_gate(g) for g in ("I", "X", "Z", "Y")]   # index x + 2 z
 CLASS = {(str(r.x_output(0))[1:], str(r.z_output(0))[1:]): i for i, r in enumerate(REPS)}
 OTHER = {"X": "Z", "Z": "X", "Y": "Z"}
+PREFIX_CHOICES = 1 << 12
 
 
 # ------------------------------------------------------------------ the loss model
@@ -397,53 +402,81 @@ def _certify(flat, model, res):
             pp[y], par[y] = x, sx ^ sy ^ c
     res.groups = len({find(s)[0] for s in range(len(segs))})
 
-    def frame_class(r, flip):
+    def frame_class(r, flips, alt):
+        """Frame class of root r: its axes' channels follow its role (flipped per component by `flips`); a root
+        with fewer than two axes takes its free second axis, or its whole class, from `alt`."""
         d = axes.get(r)
         if not d:
-            return 0
+            return alt.get(r, 0)
         comp, beta = pfind(r)
-        beta ^= flip.get(comp, 0)
         f = first[r]
-        want = {f: "Z" if beta else "X"}
+        want = {f: "Z" if beta ^ flips.get(comp, 0) else "X"}
         other = [a for a in d if a != f]
-        want[other[0] if other else OTHER[f]] = "X" if want[f] == "Z" else "Z"
+        want[other[0] if other else alt.get(r, OTHER[f])] = "X" if want[f] == "Z" else "Z"
         (c,) = [c for c in range(6) if all(channel(c, a) == ch for a, ch in want.items())]
         return c
 
-    # ---------------------------------------------------------------- 5. entangled prefix state: CSS in the frame?
-    flip, prefix_rows = {}, []
-    if sub:
-        comps = sorted({pfind(find(cut[q])[0])[0] for q in keep})
-        for bits in range(1 << min(12, max(0, len(comps) - 1))):
-            trial = {c: (bits >> i) & 1 for i, c in enumerate(comps[1:])}
-            pure = _pure_generators(sub, keep, n, lambda q: find(cut[q])[1] * REPS[frame_class(find(cut[q])[0], trial)])
-            if pure is not None:
-                flip = trial
-                prefix_rows = [(_sign_mask(p, lambda q: find(cut[q])[0]), int(p.sign.real < 0)) for p in pure]
-                break
-        else:
-            raise _Fail(f"prefix output state is not CSS in the frames the rest of the circuit forces "
-                        f"({len(comps)} role components tried)")
+    # ---------------------------------------------------------------- 5-6. prefix state and signs
+    # The lossy part fixes every frame up to Pauli parts, except two choices that only the prefix state can tell
+    # apart: a role flip per component, and the free second axis of a root that uses fewer than two axes.  Under
+    # assumption (iii) neither matters (flipping a component conjugates its stabilizers by H; no free axes), so one
+    # candidate decides.  Otherwise every candidate is tried, up to PREFIX_CHOICES.
+    kept = {find(cut[q])[0] for q in keep}
+    flip_comps = []
+    if sub and not _generated_within(sub, {q: pfind(find(cut[q])[0])[0] for q in keep}, n):
+        flip_comps = sorted({pfind(r)[0] for r in kept if axes.get(r)})[1:]
+    dims = [[("flip", c, 0), ("flip", c, 1)] for c in flip_comps]
+    for r in sorted(kept):
+        d = axes.get(r, ())
+        if len(d) == 1:
+            (f,) = d
+            dims.append([("alt", r, a) for a in (OTHER[f], *({"X", "Y", "Z"} - {f, OTHER[f]}))])
+        elif not d:
+            dims.append([("alt", r, c) for c in range(6)])
+    candidates = int(np.prod([len(d) for d in dims])) if dims else 1
+    cache = {}
 
-    # ---------------------------------------------------------------- 6. signs: choose the Pauli parts
-    cls_of = {}
+    def solve(flips, alt):
+        """(frame0, solution) for one candidate, or None with the reason the prefix state rules it out."""
+        cls_of = {}
 
-    def frame0(s, A_):
-        """(root, frame at time A_ of segment s, without the root's Pauli part)."""
-        r, Tl = find(s)
-        if r not in cls_of:
-            cls_of[r] = frame_class(r, flip)
-        return r, A_ * Tl * REPS[cls_of[r]]
+        def frame0(s, A_):
+            """(root, frame at time A_ of segment s, without the root's Pauli part)."""
+            r, Tl = find(s)
+            if r not in cls_of:
+                cls_of[r] = frame_class(r, flips, alt)
+            return r, A_ * Tl * REPS[cls_of[r]]
 
-    # Every sign requirement is one affine system over the groups' Pauli parts: frame-CSS needs all of them.
-    system, cache = _GF2(), {}
-    for chk in checks:
-        roots, eqs = _sign_equations(chk, frame0, cache)
-        if not all(system.add(*row) for row in _place(eqs, roots)):
-            raise _Fail(f"{_describe(chk)}: no choice of Pauli parts gives it a + sign together with the checks before it")
-    if not all(system.add(*row) for row in prefix_rows):
-        raise _Fail("prefix output state: no choice of Pauli parts makes all its CSS generators +")
-    sol = system.solution()
+        prefix_rows = []
+        if sub:
+            pure = _pure_generators(sub, keep, n, lambda q: frame0(cut[q], I1)[1])
+            if pure is None:
+                return None, "it is not CSS in the frames the rest of the circuit forces"
+            prefix_rows = [(_sign_mask(p, lambda q: find(cut[q])[0]), int(p.sign.real < 0)) for p in pure]
+        # Every sign requirement is one affine system over the groups' Pauli parts.  The lossy part's own
+        # requirements are solvable for every candidate or for none, so their failure is final.
+        system = _GF2()
+        for chk in checks:
+            roots, eqs = _sign_equations(chk, frame0, cache)
+            if not all(system.add(*row) for row in _place(eqs, roots)):
+                raise _Fail(f"{_describe(chk)}: no choice of Pauli parts gives it a + sign together with the checks before it")
+        if not all(system.add(*row) for row in prefix_rows):
+            return None, "no choice of Pauli parts makes all its CSS generators +"
+        return (frame0, system.solution()), None
+
+    found, why = None, None
+    for choice in itertools.islice(itertools.product(*dims), PREFIX_CHOICES):
+        found, reason = solve({c: v for kind, c, v in choice if kind == "flip"},
+                              {r: v for kind, r, v in choice if kind == "alt"})
+        if found:
+            break
+        why = why or reason
+    if not found:
+        if candidates > PREFIX_CHOICES:
+            raise _Outside(f"assumption (iii): the prefix state leaves {candidates} role and axis choices open, more "
+                           f"than the {PREFIX_CHOICES} tried, and none of those works ({why})")
+        raise _Fail(f"prefix output state: {why} (all {candidates} role and axis choices tried)")
+    frame0, sol = found
 
     def frame(s, A_):
         r, F = frame0(s, A_)
@@ -637,6 +670,28 @@ def _nullspace(M):
 def _rank(M):
     M = np.asarray(M, np.uint8)
     return M.shape[0] - len(_nullspace(M)) if len(M) else 0
+
+
+def _generated_within(gens, part_of, n):
+    """Is <gens> generated by elements that each act within one part?  Equivalently, does each generator's
+    restriction to each part lie in the group (up to sign)?"""
+    def vec(p):
+        x, z = p.to_numpy()
+        return sum(1 << int(q) for q in np.flatnonzero(x)) | sum(1 << (n + int(q)) for q in np.flatnonzero(z))
+
+    def reduce(v):
+        while v and (h := v.bit_length() - 1) in piv:
+            v ^= piv[h]
+        return v
+
+    vecs, piv = [vec(g) for g in gens], {}
+    for v in vecs:
+        if v := reduce(v):
+            piv[v.bit_length() - 1] = v
+    masks = {}
+    for q, part in part_of.items():
+        masks[part] = masks.get(part, 0) | (1 << q) | (1 << (n + q))
+    return not any(reduce(v & m) for v in vecs for m in masks.values() if v & m)
 
 
 def _pure_generators(gens, keep, n, frame_of):

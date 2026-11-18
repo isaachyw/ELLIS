@@ -222,3 +222,32 @@ def test_operations_outside_assumption_i_stop_early(text):
 def test_pauli_noise_is_inside_the_assumptions():
     c = stim.Circuit("R 0 1\nPAULI_CHANNEL_1(0.1, 0, 0) 0\nE(0.1) X0 Z1\nCX 0 1\nM 0 1")
     assert frame_css(c, EVERY).verdict == "frame-css"
+
+
+def _noiseless(c):
+    out = stim.Circuit()
+    for inst in c:
+        out.append(stim.CircuitInstruction(inst.name, inst.targets_copy(), inst.gate_args_copy(), tag="noiseless"))
+    return out
+
+
+ANY = LossModel(after="any")
+
+
+def test_prefix_state_sets_the_free_second_axes():
+    # after the prefix both qubits use only their Z axis (CZ, M), so their second channels are free; the prefix
+    # state (stabilizers ZY, YZ) is CSS only if Y carries them: frames Y->X on qubit 0 and Y->Z on qubit 1
+    prep = stim.Tableau.from_stabilizers([stim.PauliString("ZY"), stim.PauliString("YZ")]).to_circuit("elimination")
+    c = _noiseless(prep) + stim.Circuit("I 0 1\nCZ 0 1\nM 0 1")
+    rel = frame_css(c, ANY)
+    assert rel.verdict == "frame-css"
+    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, ANY), pairs=True)) == []
+
+
+@pytest.mark.parametrize("readout", ["MX 1", "MY 1"])
+def test_prefix_entangles_qubits_no_later_gate_links(readout):
+    # a Bell pair whose halves are only read: two role components, and only one relative role choice works
+    c = _noiseless(stim.Circuit("H 0\nCX 0 1")) + stim.Circuit(f"I 0 1\nM 0\n{readout}")
+    rel = frame_css(c, ANY)
+    assert rel.verdict == "frame-css"
+    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, ANY), pairs=True)) == []
