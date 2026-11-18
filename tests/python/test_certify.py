@@ -137,7 +137,7 @@ def test_closed_diagonal_blocks():
     # a CZ triangle (odd cycle: not frame-CSS) applied twice is I, and S.S = Z leaves a Z on qubit 0:
     # proven with a masked Z gauge, and the gauged sampler is exact (qubit 0 ends in |->)
     c = stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nS 0\nS 0\nMX 0 1 2")
-    assert frame_css(c).proven             # losses only after the whole CZ layer: the triangles cancel in the prefix
+    assert frame_css(c).verdict == "outside-assumptions"  # the prefix would end inside the fused CZ layer
     assert not frame_css(c, EVERY).proven  # a loss between the triangles' CZs
     cert = certify(c, EVERY)
     assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks+gauge")
@@ -166,7 +166,7 @@ def test_readouts_start_new_segments():
 def test_noiseless_prefix_is_checked_as_a_state():
     # the noiseless encoder uses ISWAP, CSS in no frame, but leaves a Bell pair; losses start after it
     c = stim.Circuit("RX 0\nR 1 2\nCX[noiseless] 0 1\nISWAP[noiseless] 0 1\nISWAP_DAG[noiseless] 0 1\n"
-                     "CX 0 2\nCX 1 2\nM 2\nMX 0 1")
+                     "CX 0 2\nTICK\nCX 1 2\nM 2\nMX 0 1")
     rel = frame_css(c)                                   # default model: losses after noisy two-qubit gates
     assert rel.proven and rel.prefix_end == 5
     fam = loss_family(c, slots=loss_locations(c, LossModel()), n_random=30, seed=2)
@@ -284,3 +284,21 @@ def test_prefix_with_too_many_open_choices_is_outside_the_assumptions(monkeypatc
     c = _read_after_prefix(RING5 + ghz, 13)
     assert frame_css(c, ANY).verdict == "outside-assumptions"
     assert certify(c, ANY).verdict == "outside-assumptions"
+
+
+def test_prefix_cannot_end_inside_an_instruction_that_repeats_a_qubit():
+    # Stim fuses the two SWAP lines; a loss may follow the first SWAP, so the prefix cannot hold both
+    fused = stim.Circuit("RX 0 1\nS 0\nS 0\nSWAP 1 0\nSWAP 1 0\nMX 0 1")
+    assert frame_css(fused).verdict == "outside-assumptions"
+    split = stim.Circuit("RX 0 1\nS 0\nS 0\nSWAP 1 0\nTICK\nSWAP 1 0\nMX 0 1")
+    assert frame_css(split).verdict == "not-frame-css"
+
+
+def test_prefix_reset_of_an_entangled_qubit_is_a_partial_trace():
+    # resetting half of a Bell pair must not pick a random branch for the other half
+    c = stim.Circuit("R 0 1\nH 0\nCX[noiseless] 0 1\nR[noiseless] 1\nM[noiseless] 0\nCX 0 1\nM 0 1")
+    model = LossModel()
+    verdicts = {(r.verdict, tuple(r.reference.tolist())) for r in (frame_css(c, model) for _ in range(20))}
+    assert len(verdicts) == 1 and next(iter(verdicts))[0] == "frame-css"
+    rel = frame_css(c, model)
+    assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, model), pairs=True)) == []

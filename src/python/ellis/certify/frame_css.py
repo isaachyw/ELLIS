@@ -235,6 +235,15 @@ def _certify(flat, model, res):
     locations = loss_locations(flat, model)
     k0 = min((k for k, _ in locations), default=len(ops) - 1)
     res.prefix_end = k0
+    # Losses happen between instructions, which is the same as after each gate unless a qubit repeats inside one
+    # instruction.  Only the prefix end depends on the timing (frames and the theorem do not), so only the
+    # instruction that ends the prefix must not repeat a qubit.
+    end = ops[k0] if k0 >= 0 else None
+    if end is not None and (end.name in mf.UNITARY_2Q or end.name in mf.MEAS):
+        qs = [t.value for t in end.targets_copy()]
+        if len(set(qs)) < len(qs):
+            raise _Outside(f"assumption (ii): the first loss can follow instruction {k0} `{end}`, which acts on a qubit "
+                           f"twice, so the loss-free prefix would end inside it; separate its gates with a TICK")
     ref = _stripped(ops[: k0 + 1]).reference_sample()       # the loss-free prefix's readouts
 
     # ---------------------------------------------------------------- 1. timeline: segments and what they must satisfy
@@ -619,6 +628,20 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
     qubits, generators of the kept part of the state: the elements acting as identity on every other qubit)."""
     sim = stim.TableauSimulator()
     sim.set_num_qubits(n)
+    spare = n
+
+    def reset(q, axis):
+        """Discard q's state into a fresh qubit that nothing touches again (a partial trace: Stim's own reset
+        would collapse q's partners onto a random branch), then prepare the + eigenstate of axis."""
+        nonlocal spare
+        sim.set_num_qubits(spare + 1)
+        sim.swap(q, spare)
+        spare += 1
+        if axis != "Z":
+            sim.h(q)
+        if axis == "Y":
+            sim.s(q)
+
     m = 0
     for inst in ops[: k0 + 1]:
         name, gd = inst.name, stim.gate_data(inst.name)
@@ -631,8 +654,11 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
                 getattr(sim, "postselect_" + mf.MEAS[name].lower())(
                     t.value, desired_value=bool(ref[m]) ^ t.is_inverted_result_target)
                 if name.startswith("MR"):
-                    sim.do(stim.Circuit(f"R{'' if mf.MEAS[name] == 'Z' else mf.MEAS[name]} {t.value}"))
+                    reset(t.value, mf.MEAS[name])
                 m += 1
+        elif name in mf.RESET:
+            for t in inst.targets_copy():
+                reset(t.value, mf.RESET[name])
         else:
             sim.do(stim.Circuit(f"{name} " + " ".join(str(t.value) for t in inst.targets_copy())))
     keep = []
@@ -650,14 +676,14 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
     if not keep:
         return [], []
     stabs = sim.canonical_stabilizers()
-    drop = [q for q in range(n) if q not in set(keep)]
+    drop = [q for q in range(spare) if q not in set(keep)]
     rows = np.array([np.concatenate([g.to_numpy()[0][drop], g.to_numpy()[1][drop]]) for g in stabs], np.uint8)
     out = []
     for c in (_nullspace(rows) if drop else list(np.eye(len(stabs), dtype=np.uint8))):
-        p = stim.PauliString(n)
+        p = stim.PauliString(spare)
         for i in np.flatnonzero(c):
             p *= stabs[i]
-        out.append(p)
+        out.append(p[:n])
     return keep, out
 
 
