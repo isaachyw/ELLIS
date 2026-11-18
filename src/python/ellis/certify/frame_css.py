@@ -29,12 +29,12 @@ readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
 Scope.  The decision below is exact (it accepts exactly the frame-CSS circuits) under the paper's assumptions:
 (i) the operations are single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates and Pauli
-noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) the prefix output state is generated
-by stabilizers that each act within one role component, and every qubit it leaves entangled later uses two Pauli
-axes.  Under (iii) the rest of the circuit fixes every frame up to Pauli parts and harmless role flips, so one
-candidate decides.  Outside (iii) every remaining choice (a role flip per component, a free second axis per loose
-qubit) is tried, so the answer stays exact, unless there are more than PREFIX_CHOICES candidates: then the
-verdict is "outside-assumptions".  A circuit that breaks (i) gets "outside-assumptions" before any stage runs.
+noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) the prefix leaves at most
+PREFIX_CHOICES combinations of open frame choices.  The rest of the circuit fixes every frame up to Pauli parts
+except a role flip per component and the free second axis of a qubit that later uses one axis; both are tried
+against the prefix state.  There is one combination when the prefix state is generated within role components
+and every qubit it leaves entangled later uses two axes, e.g. for a prefix of resets.  A circuit that breaks (i)
+gets "outside-assumptions" before any stage runs; one that breaks (iii) gets it when no combination tried works.
 
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
@@ -45,6 +45,7 @@ Decision procedure (near-linear in the circuit, plus one tableau simulation of t
   * one GF(2) system over the frames' Pauli parts (two bits per group) sets the signs.
 """
 import itertools
+import math
 from dataclasses import dataclass, field
 from typing import Literal, NamedTuple
 
@@ -444,7 +445,7 @@ def _certify(flat, model, res):
             dims.append([("alt", r, a) for a in (OTHER[f], *({"X", "Y", "Z"} - {f, OTHER[f]}))])
         elif not d:
             dims.append([("alt", r, c) for c in range(6)])
-    candidates = int(np.prod([len(d) for d in dims])) if dims else 1
+    candidates = math.prod(len(d) for d in dims)
     cache = {}
 
     def solve(flips, alt):
