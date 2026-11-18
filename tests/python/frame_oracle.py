@@ -317,6 +317,14 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
         if model.reload_state == "zero" and lost(q, k):
             reloads.append((cur[q], acc[q], next(clock), f"reload of qubit {q} before instruction {k}"))
 
+    loc_set = set(locs)
+
+    def mid_reload(q: int, k: int):
+        """Reloads anywhere also land between two gates of one instruction on q: Stim fuses repeated lines, but they
+        stay separate gates, and q may be lost after the first if the instruction is a loss location."""
+        if model.reload == "anywhere" and model.reload_state == "zero" and (lost(q, k) or (k, q) in loc_set):
+            reloads.append((cur[q], acc[q], next(clock), f"reload of qubit {q} inside instruction {k}"))
+
     p.post_cut = [new_segment(q) for q in range(n)]
     m = flat[: k0 + 1].num_measurements
     for k in range(k0 + 1, N):
@@ -333,15 +341,22 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
         elif name in INERT:
             continue
         elif name in GATE:
-            for t in targets:
-                acc[t.value] = MUL[GATE[name]][acc[t.value]]
+            qs = [t.value for t in targets]
+            for i, q in enumerate(qs):
+                acc[q] = MUL[GATE[name]][acc[q]]
+                if q in qs[i + 1:]:
+                    mid_reload(q, k)
         elif name in RESET_BASIS:
-            for t in targets:
+            qs = [t.value for t in targets]
+            for i, t in enumerate(targets):
                 s = new_segment(t.value)
                 require(s, ID, lambda f, b=RESET_BASIS[name]: prep_ok(f, b), f"reset of qubit {t.value} at {k}")
+                if t.value in qs[i + 1:]:
+                    mid_reload(t.value, k)
         elif name in MEAS_BASIS:
             basis = MEAS_BASIS[name]
-            for t in targets:
+            qs = [t.value for t in targets]
+            for i, t in enumerate(targets):
                 q, old, a = t.value, cur[t.value], acc[t.value]
                 require(old, a, lambda f, b=basis: reads_channel(f, b), f"readout of qubit {q} at {k}")
                 readouts.append((m, old, a, basis, t.is_inverted_result_target))
@@ -354,6 +369,8 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
                     sup = [mask(lambda g, fa=MUL[a][f], b=basis: reads_channel(fa, b) and reads_channel(g, b)
                                 and LOCAL[g][b][0] == LOCAL[fa][b][0]) for f in range(24)]
                     binary.append((old, s, sup, f"sign kept by qubit {q} after its readout at {k}"))
+                if q in qs[i + 1:]:
+                    mid_reload(q, k)
         else:
             gp = good_pairs(name)
             qs = [t.value for t in targets]
