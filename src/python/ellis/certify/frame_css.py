@@ -25,11 +25,7 @@ pattern of the model, so the plain masked frame with reference kappa is exact.  
 branch that reads kappa at every random readout.  In the frame the state stays positive CSS: surviving
 operations obey the rules, dropped gates do nothing (frames never change across two-qubit gates), a
 discard keeps the stabilizers trivial on the lost atom, and a reload adds one + stabilizer.  So every
-readout can read its kappa bit (paper, sec. "Local-frame compilation into CSS").
-
-Gauge.  If the frames exist only up to Pauli signs, each wrong sign is fixed by a Pauli applied in the
-masked frame right after its operation, masked by the operation's operands (`sample(gauge=...)`).
-A reload check cannot be fixed this way (the Pauli would have to act only where a reload happened).
+readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
@@ -41,7 +37,7 @@ Decision procedure (near-linear in the circuit, plus one tableau simulation of t
 """
 import itertools
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import numpy as np
 import stim
@@ -139,16 +135,21 @@ SHAPES = {name: _shape(name) for name in sorted(mf.UNITARY_2Q)}
 
 
 # ------------------------------------------------------------------ result and checks
+Verdict = Literal["frame-css", "not-frame-css", "outside-assumptions"]
+
+
 @dataclass
 class FrameCSS:
-    proven: bool                                 # kappa (with the gauge, if any) is exact for the model
-    exact: bool = False                          # no gauge needed
-    reference: np.ndarray | None = None          # kappa, for frame.sample(reference=...)
-    gauge: dict = field(default_factory=dict)    # {index: [(qubit, pauli, mask_qubits)]} for frame.sample(gauge=...)
+    verdict: Verdict
+    reference: np.ndarray | None = None          # kappa, for frame.sample(reference=...), when frame-CSS
     prefix_end: int = -1                         # last instruction of the loss-free prefix
     segments: int = 0
     groups: int = 0
-    reasons: list = field(default_factory=list)  # why not proven, or why a gauge is needed
+    reasons: list = field(default_factory=list)  # why not frame-CSS, or which assumption fails
+
+    @property
+    def proven(self) -> bool:
+        return self.verdict == "frame-css"
 
 
 class Prep(NamedTuple):      # a + eigenstate of the physical axis, at frame time A of segment seg
@@ -156,9 +157,9 @@ class Prep(NamedTuple):      # a + eigenstate of the physical axis, at frame tim
     A: stim.Tableau
     axis: str
     sign: int
-    k: int                   # the gauge goes before instruction k + 1
+    k: int
     q: int
-    reload: bool             # a reload: must hold exactly (no gauge)
+    reload: bool
 
 
 class Link(NamedTuple):      # a readout's post-state: the old frame's sign must equal the new frame's sign
@@ -178,7 +179,6 @@ class Gate(NamedTuple):      # a two-qubit gate in the frames of its operands
     Ab: stim.Tableau
     k: int
     qs: tuple
-    alone: bool              # no later pair of the same instruction touches these qubits (a gauge fits after it)
 
 
 class _Fail(Exception):
@@ -186,12 +186,11 @@ class _Fail(Exception):
 
 
 def frame_css(circuit: stim.Circuit, model: LossModel = LossModel()) -> FrameCSS:
-    """Decide frame-CSS for the loss model; build kappa and, where needed, the gauge."""
-    res = FrameCSS(False)
+    """Decide frame-CSS for the loss model and build kappa."""
+    res = FrameCSS("not-frame-css")
     try:
         _certify(circuit.flattened(), model, res)
     except _Fail as e:
-        res.proven = False
         res.reasons.append(str(e))
     return res
 
@@ -289,8 +288,7 @@ def _certify(flat, model, res):
                 reload_point(q, k)
         elif name in mf.UNITARY_2Q:
             shape = SHAPES[name]
-            pairs = list(zip(qs[::2], qs[1::2]))
-            for i, (a, b) in enumerate(pairs):
+            for a, b in zip(qs[::2], qs[1::2]):
                 sa, sb, Aa, Ab = cur[a], cur[b], A[a], A[b]
                 used.update((sa, sb))
                 where = f"{name} at instruction {k} on {(a, b)}"
@@ -306,8 +304,7 @@ def _certify(flat, model, res):
                     _, M0, need = shape
                     perms.append((sa, sb, Ab.inverse() * M0 * Aa, where))
                     uses += [(sa, Aa, ax, where) for ax in need]
-                alone = not any({a, b} & set(p) for p in pairs[i + 1:])
-                checks.append(Gate(name, sa, Aa, sb, Ab, k, (a, b), alone))
+                checks.append(Gate(name, sa, Aa, sb, Ab, k, (a, b)))
         else:
             raise _Fail(f"instruction {k} `{inst}`: `{name}` is not supported")
         for q in after.get(k, ()):
@@ -413,40 +410,36 @@ def _certify(flat, model, res):
             cls_of[r] = frame_class(r, flip)
         return r, A_ * Tl * REPS[cls_of[r]]
 
-    # Reload checks first: they must hold.  Then every other check, greedily; a check with an equation the
-    # system refuses gets a gauge Pauli below.  An accepted equation holds in the final solution.
-    system, cache, wrong = _GF2(), {}, []
-    hard = [c for c in checks if isinstance(c, Prep) and c.reload]
-    for chk in hard + [c for c in checks if not (isinstance(c, Prep) and c.reload)]:
+    # Every sign requirement is one affine system over the groups' Pauli parts: frame-CSS needs all of them.
+    system, cache = _GF2(), {}
+    for chk in checks:
         roots, eqs = _sign_equations(chk, frame0, cache)
-        if not all([system.add(*row) for row in _place(eqs, roots)]):
-            if isinstance(chk, Prep) and chk.reload:
-                raise _Fail(f"reload of qubit {chk.q} at instruction {chk.k} needs a sign no frame gives")
-            wrong.append(chk)
-    prefix_wrong = not all([system.add(*row) for row in prefix_rows])
+        if not all(system.add(*row) for row in _place(eqs, roots)):
+            raise _Fail(f"{_describe(chk)}: no choice of Pauli parts gives it a + sign together with the checks before it")
+    if not all(system.add(*row) for row in prefix_rows):
+        raise _Fail("prefix output state: no choice of Pauli parts makes all its CSS generators +")
     sol = system.solution()
 
     def frame(s, A_):
         r, F = frame0(s, A_)
         return F * PAULI_PART[((sol >> (2 * r)) & 1) | (((sol >> (2 * r + 1)) & 1) << 1)]
 
-    # ---------------------------------------------------------------- 7. kappa, and a gauge for every wrong sign
+    # ---------------------------------------------------------------- 7. kappa
     for mi, s, A_, axis, inverted in meas:
         letter, sign = image(frame(s, A_), axis)
         assert letter in "XZ", (mi, letter)
         kappa[mi] = (sign < 0) ^ inverted
     res.reference = kappa
-    for chk in wrong:
-        fixes = _residual(chk, frame)
-        assert fixes, chk
-        for k, q, pauli, mask in fixes:
-            res.gauge.setdefault(k, []).append((q, pauli, mask))
-    if prefix_wrong:
-        for q, pauli in _prefix_residual(sub, keep, n, lambda q: frame(cut[q], I1)):
-            res.gauge.setdefault(k0 + 1, []).append((q, pauli, (q,)))
-    res.proven, res.exact = True, not res.gauge
-    if res.gauge:
-        res.reasons.append(f"frames exist up to Pauli signs: {sum(map(len, res.gauge.values()))} gauge Paulis")
+    res.verdict = "frame-css"
+
+
+def _describe(chk):
+    if isinstance(chk, Prep):
+        what = "reload" if chk.reload else "prepared state"
+        return f"{what} of qubit {chk.q} at instruction {chk.k}"
+    if isinstance(chk, Link):
+        return f"readout of qubit {chk.q} at instruction {chk.k} (sign carried into the next segment)"
+    return f"{chk.name} at instruction {chk.k} on {chk.qs}"
 
 
 # ------------------------------------------------------------------ signs
@@ -482,75 +475,9 @@ def _sign_equations(chk, frame0, cache):
     return ([ra] if same else [ra, rb]), cache[key]
 
 
-def _residual(chk, frame):
-    """Gauge Paulis [(index, qubit, pauli, mask)] that fix this check's sign with the chosen frames."""
-    if isinstance(chk, Prep):
-        F = frame(chk.seg, chk.A)
-        letter, sign = image(F, chk.axis, chk.sign)
-        if sign > 0:
-            return []
-        assert not chk.reload, chk
-        fix = F(stim.PauliString(OTHER[letter]))
-        return [(chk.k + 1, chk.q, "_XYZ"[fix[0]], (chk.q,))]
-    if isinstance(chk, Link):
-        Fo, Fn = frame(chk.old, chk.A), frame(chk.new, I1)
-        if image(Fo, chk.axis)[1] == image(Fn, chk.axis)[1]:
-            return []
-        fix = Fn(stim.PauliString(OTHER[image(Fn, chk.axis)[0]]))
-        return [(chk.k + 1, chk.q, "_XYZ"[fix[0]], (chk.q,))]
-    W = frame(chk.sa, chk.Aa) + frame(chk.sb, chk.Ab)
-    G = W.inverse() * stim.Tableau.from_named_gate(chk.name) * W           # the gate in the frame
-    if positive_css(G):
-        return []
-    if not chk.alone:
-        raise _Fail(f"{chk.name} at instruction {chk.k} on {chk.qs} needs a gauge Pauli, but a later pair of the same "
-                    f"instruction acts on its qubits; split the instruction")
-    unsigned = stim.Tableau.from_conjugated_generators(
-        xs=[_positive(G.x_output(i)) for i in range(2)], zs=[_positive(G.z_output(i)) for i in range(2)])
-    phys = W(_pauli_of(G * unsigned.inverse()))                            # G = P unsigned: P acts right after
-    return [(chk.k + 1, q, "_XYZ"[phys[i]], chk.qs) for i, q in enumerate(chk.qs) if phys[i]]
-
-
-def _prefix_residual(gens, keep, n, frame_of):
-    """Physical Paulis on the kept qubits that make every pure generator of the in-frame prefix state +."""
-    F = stim.Tableau(n)
-    for q in keep:
-        F.append(frame_of(q), [q])
-    pure = _pure_generators(gens, keep, n, frame_of)
-    bad = [p for p in pure if p.sign.real < 0]
-    if not bad:
-        return []
-    # Q = X^qx Z^qz (frame coordinates, bits qx_q at q and qz_q at n + q) anticommutes with exactly the
-    # negative generators: qx.z + qz.x = [g negative] for each generator g = X^x Z^z.
-    system = _GF2()
-    for p in pure:
-        x, z = p.to_numpy()
-        y = sum(1 << int(q) for q in np.flatnonzero(z)) | sum(1 << (n + int(q)) for q in np.flatnonzero(x))
-        assert system.add(y, int(p.sign.real < 0))
-    sol = system.solution()
-    Q = stim.PauliString(n)
-    for q in range(n):
-        Q[q] = "_XZY"[((sol >> q) & 1) | (((sol >> (n + q)) & 1) << 1)]
-    phys = F(Q)
-    return [(q, "_XYZ"[phys[q]]) for q in keep if phys[q]]
-
-
-def _positive(p):
-    return p * int(p.sign.real)
-
-
 def _is_pauli(t):
     return all(str(t.x_output(k))[1:] == "_" * k + "X" + "_" * (len(t) - k - 1) and
                str(t.z_output(k))[1:] == "_" * k + "Z" + "_" * (len(t) - k - 1) for k in range(len(t)))
-
-
-def _pauli_of(t):
-    """The Pauli P whose conjugation is the Pauli tableau t."""
-    out = stim.PauliString(len(t))
-    for k in range(len(t)):
-        sx, sz = str(t.x_output(k))[0] == "-", str(t.z_output(k))[0] == "-"
-        out[k] = {(False, False): 0, (True, False): 3, (False, True): 1, (True, True): 2}[(sx, sz)]
-    return out
 
 
 def _equations(pred, nroots):

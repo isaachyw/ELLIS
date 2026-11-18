@@ -77,7 +77,7 @@ def test_benchmark_xzzx_is_proven():
 def test_kappa_differs_from_stim_reference():
     c = stim.Circuit("SQRT_Y_DAG 0\nRX 1\nS 1\nSQRT_X 2\nCX 1 2\nCZ 1 0\nMX 0\nM 1\nMY 2")
     rel = frame_css(c, EVERY)
-    assert rel.proven and rel.exact and rel.reference is not None
+    assert rel.verdict == "frame-css" and rel.reference is not None
     assert rel.reference.astype(int).tolist() == [1, 0, 1]
     fam = loss_family(c, slots=loss_locations(c, EVERY), n_random=0)
     assert check_reference(c, rel.reference, fam) == []
@@ -137,7 +137,7 @@ def test_closed_diagonal_blocks():
     # a CZ triangle (odd cycle: not frame-CSS) applied twice is I, and S.S = Z leaves a Z on qubit 0:
     # proven with a masked Z gauge, and the gauged sampler is exact (qubit 0 ends in |->)
     c = stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nS 0\nS 0\nMX 0 1 2")
-    assert frame_css(c).exact              # losses only after the whole CZ layer: the triangles cancel in the prefix
+    assert frame_css(c).proven             # losses only after the whole CZ layer: the triangles cancel in the prefix
     assert not frame_css(c, EVERY).proven  # a loss between the triangles' CZs
     cert = certify(c, EVERY)
     assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks+gauge")
@@ -159,7 +159,7 @@ def test_readouts_start_new_segments():
     # qubit 0 is read, rotated by H and reused with the same partner: the readout starts a new frame
     c = stim.Circuit("RX 0\nR 1\nCX 0 1\nMX 0\nH 0\nCX 0 1\nM 0 1")
     rel = frame_css(c, EVERY)
-    assert rel.proven and rel.exact
+    assert rel.proven
     assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, EVERY), n_random=50, seed=1)) == []
 
 
@@ -168,7 +168,7 @@ def test_noiseless_prefix_is_checked_as_a_state():
     c = stim.Circuit("RX 0\nR 1 2\nCX[noiseless] 0 1\nISWAP[noiseless] 0 1\nISWAP_DAG[noiseless] 0 1\n"
                      "CX 0 2\nCX 1 2\nM 2\nMX 0 1")
     rel = frame_css(c)                                   # default model: losses after noisy two-qubit gates
-    assert rel.proven and rel.exact and rel.prefix_end == 5
+    assert rel.proven and rel.prefix_end == 5
     fam = loss_family(c, slots=loss_locations(c, LossModel()), n_random=30, seed=2)
     assert check_reference(c, rel.reference, fam) == []
     assert not frame_css(c, EVERY).proven                # the encoder itself may lose atoms
@@ -183,21 +183,23 @@ def test_failing_reload_marker_is_a_loss_location_where_the_slot_may_be_empty():
 def test_reload_markers(marker):
     # gates H S S H (= X) then H S S H again: identity at the CX, but X halfway through
     run = "H 0\nTICK\nS 0\nTICK\nS 0\nTICK\nH 0\nTICK\n"
-    base = "R 0 1\nRX 2\nCX 2 0\n" + run + "{marker}" + run + "CX 0 1\nM 0 1\nMX 2"
-    plain = stim.Circuit(base.format(marker=""))
-    assert frame_css(plain).exact                         # no reload: exact
+    base = "R 0 1\nRX 2\nCX 2 0\n" + run + "{mid}" + run + "{late}" + "CX 0 1\nM 0 1\nMX 2"
+    plain = stim.Circuit(base.format(mid="", late=""))
+    assert frame_css(plain).proven                        # no reload
     rel = frame_css(plain, LossModel(reload="anywhere"))  # a reload where the gates so far are X reads 1 at the CX
     assert not rel.proven and "reload of qubit 0" in rel.reasons[0]
-    marked = stim.Circuit(base.format(marker=marker))
     model = LossModel(after="any")
-    rel = frame_css(marked, model)                        # the marker's reload: fixed by a masked gauge
-    assert rel.proven and not rel.exact and rel.gauge
-    always = stim.Circuit(base.format(marker="I_ERROR[reload] 0\n"))   # family patterns fix each reload's outcome
-    fam = loss_family(marked, slots=loss_locations(marked, model), n_random=40, max_losses=3, seed=3)
-    k_marker = next(k for k, inst in enumerate(marked) if mf.is_reload(inst))
+    rel = frame_css(stim.Circuit(base.format(mid=marker, late="")), model)
+    assert rel.verdict == "not-frame-css"                 # the marker reloads |0> where the frame is X
+    late = stim.Circuit(base.format(mid="", late=marker))  # after both runs the frame is back to I
+    rel = frame_css(late, model)
+    assert rel.proven
+    always = stim.Circuit(base.format(mid="", late="I_ERROR[reload] 0\n"))   # family patterns fix each reload's outcome
+    fam = loss_family(late, slots=loss_locations(late, model), n_random=40, max_losses=3, seed=3)
+    k_marker = next(k for k, inst in enumerate(late) if mf.is_reload(inst))
     assert any(k_marker in s for s in fam) == ("(" in marker)     # failures are tested where reloads can fail
     for i, s in enumerate(fam):
-        n = marked.num_measurements + 100
-        a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference, gauge=rel.gauge)
+        n = late.num_measurements + 100
+        a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference)
         b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s

@@ -7,8 +7,8 @@ for every deterministic parity y of every C_s.  `certify(circuit)` decides this 
 
   1. validation: only operations the masked frame simulates exactly (frame.validate);
   2. a static PROOF for every loss and reload pattern of the loss model (`LossModel`): frame-CSS, i.e. CSS in
-     one local frame per state segment (frame_css.py).  It gives the reference kappa, plus a masked gauge
-     when the frames only exist up to Pauli signs;
+     one local frame per state segment (frame_css.py).  It gives the reference kappa.  A circuit outside the
+     assumptions under which frame_css decides frame-CSS exactly stops here, verdict "outside-assumptions";
   3. otherwise a static proof from closed S/CZ blocks (blocks.py; not for reload="anywhere");
   4. otherwise an exact search (constraints.py): the GF(2) system of the exact sign constraints of a family of loss
      patterns (no loss, every single loss up to ghost equivalence, optionally all pairs, random multi-loss
@@ -51,10 +51,10 @@ __all__ = ["PLACEMENTS", "Certificate", "DiagonalBlocks", "FrameCSS", "LossModel
 
 @dataclass
 class Certificate:
-    verdict: str  # "proven", "contextual" or "consistent_on_family"
-    method: str  # "frame-css", "frame-css+gauge", "diagonal-blocks", "diagonal-blocks+gauge" or "exact-search"
+    verdict: str  # "proven", "contextual", "consistent_on_family" or "outside-assumptions"
+    method: str  # "frame-css", "diagonal-blocks", "diagonal-blocks+gauge", "exact-search" or "scope"
     reference: np.ndarray | None = None
-    gauge: dict | None = None  # for frame.sample(gauge=...), with the "frame-css+gauge" method
+    gauge: dict | None = None  # for frame.sample(gauge=...), with the "diagonal-blocks+gauge" method
     witness: list | None = None  # [(loss pattern, [measurement indices of y], value)], sums to 0 = 1
     family_size: int = 0
     notes: list = field(default_factory=list)
@@ -96,10 +96,11 @@ def certify(
         return loss_family(circuit, reload=reload, slots=loss_locations(circuit, model), **kw)
 
     fc = frame_css(circuit, model)
+    if fc.verdict == "outside-assumptions":
+        return Certificate("outside-assumptions", "scope", notes=list(fc.reasons))
     if fc.proven:
-        cert = Certificate("proven", "frame-css" if fc.exact else "frame-css+gauge", fc.reference, fc.gauge or None,
-                           notes=list(fc.reasons))
-        if fc.exact and spot_check:
+        cert = Certificate("proven", "frame-css", fc.reference, notes=list(fc.reasons))
+        if spot_check:
             fam = family(n_random=0)[:spot_check]
             bad = check_reference(circuit, fc.reference, fam, reload)
             cert.family_size = len(fam)
