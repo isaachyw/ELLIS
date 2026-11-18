@@ -27,6 +27,11 @@ operations obey the rules, dropped gates do nothing (frames never change across 
 discard keeps the stabilizers trivial on the lost atom, and a reload adds one + stabilizer.  So every
 readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
+Scope.  The decision below is exact (it accepts exactly the frame-CSS circuits) under the paper's assumptions:
+(i) the operations are single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates and Pauli
+noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) no stabilizer of the prefix output
+spans two role components.  A circuit that breaks (i) or (iii) gets verdict "outside-assumptions".
+
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
     controlled (CX, CY, CZ, XC*, YC*: its two axes carry opposite channels), permutation (SWAP, CXSWAP,
@@ -132,6 +137,7 @@ def _shape(name):
 
 
 SHAPES = {name: _shape(name) for name in sorted(mf.UNITARY_2Q)}
+OPERATIONS = mf.UNITARY_1Q | mf.UNITARY_2Q | set(mf.RESET) | set(mf.MEAS)
 
 
 # ------------------------------------------------------------------ result and checks
@@ -185,14 +191,37 @@ class _Fail(Exception):
     pass
 
 
+class _Outside(Exception):
+    """The circuit breaks an assumption under which the stages decide frame-CSS exactly."""
+
+
 def frame_css(circuit: stim.Circuit, model: LossModel = LossModel()) -> FrameCSS:
     """Decide frame-CSS for the loss model and build kappa."""
     res = FrameCSS("not-frame-css")
+    flat = circuit.flattened()
     try:
-        _certify(circuit.flattened(), model, res)
+        _check_operations(flat)
+        _certify(flat, model, res)
+    except _Outside as e:
+        res.verdict = "outside-assumptions"
+        res.reasons.append(str(e))
     except _Fail as e:
         res.reasons.append(str(e))
     return res
+
+
+def _check_operations(flat):
+    """Assumption (i): single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates, Pauli
+    noise and annotations, with no classically controlled operation."""
+    for k, inst in enumerate(flat):
+        gd = stim.gate_data(inst.name)
+        if inst.name in mf.ANNOTATIONS or (gd.is_noisy_gate and not gd.produces_measurements):
+            continue
+        if inst.name not in OPERATIONS:
+            raise _Outside(f"assumption (i): instruction {k} `{inst}` is not a single-qubit reset or readout, "
+                           f"a one- or two-qubit Clifford gate, or Pauli noise")
+        if any(t.is_measurement_record_target or t.is_sweep_bit_target for t in inst.targets_copy()):
+            raise _Outside(f"assumption (i): instruction {k} `{inst}` is classically controlled")
 
 
 def _certify(flat, model, res):
@@ -256,8 +285,6 @@ def _certify(flat, model, res):
             continue
         if name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
             continue
-        if any(not t.is_qubit_target for t in targets):
-            raise _Fail(f"instruction {k} `{inst}`: only plain qubit targets are supported")
         qs = [t.value for t in targets]
         if name in mf.UNITARY_1Q:
             g = stim.Tableau.from_named_gate(name)
@@ -305,8 +332,6 @@ def _certify(flat, model, res):
                     perms.append((sa, sb, Ab.inverse() * M0 * Aa, where))
                     uses += [(sa, Aa, ax, where) for ax in need]
                 checks.append(Gate(name, sa, Aa, sb, Ab, k, (a, b)))
-        else:
-            raise _Fail(f"instruction {k} `{inst}`: `{name}` is not supported")
         for q in after.get(k, ()):
             may_be_lost.add(q)
             reload_point(q, k)

@@ -3,14 +3,14 @@
 The masked frame gets every shot's randomness and every Pauli flip right for any loss pattern s; the
 only shared ingredient is the reference record r, which must be a possible noiseless record of every lossy
 circuit C_s (gate-drop semantics; lost readouts are coins).  Equivalently r must satisfy y.r = sigma_s(y)
-for every deterministic parity y of every C_s.  `certify(circuit)` decides this in up to four steps:
+for every deterministic parity y of every C_s.  `certify(circuit)` decides this in up to three steps:
 
-  1. validation: only operations the masked frame simulates exactly (frame.validate);
-  2. a static PROOF for every loss and reload pattern of the loss model (`LossModel`): frame-CSS, i.e. CSS in
+  1. a static PROOF for every loss and reload pattern of the loss model (`LossModel`): frame-CSS, i.e. CSS in
      one local frame per state segment (frame_css.py).  It gives the reference kappa.  A circuit outside the
      assumptions under which frame_css decides frame-CSS exactly stops here, verdict "outside-assumptions";
-  3. otherwise a static proof from closed S/CZ blocks (blocks.py; not for reload="anywhere");
-  4. otherwise an exact search (constraints.py): the GF(2) system of the exact sign constraints of a family of loss
+     any other circuit must use only operations the masked frame simulates exactly (frame.validate);
+  2. otherwise a static proof from closed S/CZ blocks (blocks.py; not for reload="anywhere");
+  3. otherwise an exact search (constraints.py): the GF(2) system of the exact sign constraints of a family of loss
      patterns (no loss, every single loss up to ghost equivalence, optionally all pairs, random multi-loss
      patterns).  The constraints come from Stim's flow generators of each lossy circuit, with no sampling.
      A contradiction is a PROOF that no single reference exists, returned as a witness; no contradiction
@@ -89,7 +89,6 @@ def certify(
     spot_check optionally checks up to that many loss patterns after a static proof without gauge corrections;
     zero skips these additional checks."""
     circuit = circuit.flattened()
-    mf.validate(circuit)
     reload = model.reload_at_reset
 
     def family(**kw):
@@ -98,6 +97,7 @@ def certify(
     fc = frame_css(circuit, model)
     if fc.verdict == "outside-assumptions":
         return Certificate("outside-assumptions", "scope", notes=list(fc.reasons))
+    mf.validate(circuit)
     if fc.proven:
         cert = Certificate("proven", "frame-css", fc.reference, notes=list(fc.reasons))
         if spot_check:

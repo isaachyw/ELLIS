@@ -203,3 +203,22 @@ def test_reload_markers(marker):
         a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference)
         b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s
+
+
+@pytest.mark.parametrize("text", [
+    "R 0 1\nM 0\nCX rec[-1] 1\nM 1",
+    "R 0 1\nCX sweep[0] 1\nM 1",
+    "R 0 1\nMPP X0*X1\nM 0 1",
+    "R 0 1\nMZZ 0 1\nM 0 1",
+    "R 0 1\nSPP X0*Z1\nM 0 1",
+    "R 0\nHERALDED_ERASE(0.1) 0\nM 0",
+])
+def test_operations_outside_assumption_i_stop_early(text):
+    c = stim.Circuit(text)
+    assert frame_css(c, EVERY).verdict == "outside-assumptions"
+    assert certify(c, EVERY).verdict == "outside-assumptions"
+
+
+def test_pauli_noise_is_inside_the_assumptions():
+    c = stim.Circuit("R 0 1\nPAULI_CHANNEL_1(0.1, 0, 0) 0\nE(0.1) X0 Z1\nCX 0 1\nM 0 1")
+    assert frame_css(c, EVERY).verdict == "frame-css"
