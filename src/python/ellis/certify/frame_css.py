@@ -29,12 +29,12 @@ readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
 Scope.  The decision below is exact (it accepts exactly the frame-CSS circuits) under the paper's assumptions:
 (i) the operations are single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates and Pauli
-noise, with no classical control; (ii) the loss model is a `LossModel`; (iii) the prefix leaves at most
-PREFIX_CHOICES combinations of open frame choices.  The rest of the circuit fixes every frame up to Pauli parts
+noise, with no classical control; (ii) the prefix leaves at most PREFIX_CHOICES combinations of open frame
+choices.  The rest of the circuit fixes every frame up to Pauli parts
 except a role flip per component and the free second axis of a qubit that later uses one axis; both are tried
 against the prefix state.  There is one combination when the prefix state is generated within role components
 and every qubit it leaves entangled later uses two axes, e.g. for a prefix of resets.  A circuit that breaks (i)
-gets "outside-assumptions" before any stage runs; one that breaks (iii) gets it when no combination tried works.
+gets "outside-assumptions" before any stage runs; one that breaks (ii) gets it when no combination tried works.
 
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
@@ -250,7 +250,7 @@ def _certify(flat, model, res):
     if end is not None and not _frame_free(end):
         qs = [t.value for t in end.targets_copy()]
         if len(set(qs)) < len(qs):
-            raise _Outside(f"assumption (ii): the first loss can follow instruction {k0} `{end}`, which acts on a qubit "
+            raise _Outside(f"loss placement: the first loss can follow instruction {k0} `{end}`, which acts on a qubit "
                            f"twice, so the loss-free prefix would end inside it; separate its gates with a TICK")
     ref = _stripped(ops[: k0 + 1]).reference_sample()       # the loss-free prefix's readouts
 
@@ -459,9 +459,9 @@ def _certify(flat, model, res):
 
     # ---------------------------------------------------------------- 5-6. prefix state and signs
     # The lossy part fixes every frame up to Pauli parts, except two choices that only the prefix state can tell
-    # apart: a role flip per component, and the free second axis of a root that uses fewer than two axes.  Under
-    # assumption (iii) neither matters (flipping a component conjugates its stabilizers by H; no free axes), so one
-    # candidate decides.  Otherwise every candidate is tried, up to PREFIX_CHOICES.
+    # apart: a role flip per component, and the free second axis of a root that uses fewer than two axes.  When the
+    # prefix state is generated within components and every qubit it leaves entangled uses two axes, neither matters
+    # (flipping a component conjugates its stabilizers by H; no free axes), so one candidate decides.  Otherwise every candidate is tried, up to PREFIX_CHOICES.
     kept = {find(cut[q])[0] for q in keep}
     flip_comps = []
     if sub and not _generated_within(sub, {q: pfind(find(cut[q])[0])[0] for q in keep}, n):
@@ -514,7 +514,7 @@ def _certify(flat, model, res):
         why = why or reason
     if not found:
         if candidates > PREFIX_CHOICES:
-            raise _Outside(f"assumption (iii): the prefix state leaves {candidates} role and axis choices open, more "
+            raise _Outside(f"assumption (ii): the prefix state leaves {candidates} role and axis choices open, more "
                            f"than the {PREFIX_CHOICES} tried, and none of those works ({why})")
         raise _Fail(f"prefix output state: {why} (all {candidates} role and axis choices tried)")
     frame0, sol = found
