@@ -295,8 +295,11 @@ def _certify(flat, model, res):
                 m += 1
             continue
         if mf.is_reload(inst):
+            certain = not inst.gate_args_copy() or inst.gate_args_copy()[0] >= 1
             for t in targets:
                 reload_point(t.value, k, marked=True)
+                if certain:                                 # the slot is full until the qubit's next loss location
+                    may_be_lost.discard(t.value)
             continue
         if name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
             continue
@@ -312,6 +315,8 @@ def _certify(flat, model, res):
                 uses.append((s, I1, mf.RESET[name], f"reset at instruction {k}"))
                 checks.append(Prep(s, I1, mf.RESET[name], 1, k, q, False))
                 reload_point(q, k)
+                if model.reload == "reset":
+                    may_be_lost.discard(q)
         elif name in mf.MEAS:
             ax = mf.MEAS[name]
             for t in targets:
@@ -328,6 +333,8 @@ def _certify(flat, model, res):
                 else:                               # the readout leaves its eigenstate; sign = the record
                     checks.append(Link(old, A_old, s, ax, k, q))
                 reload_point(q, k)
+                if name.startswith("MR") and model.reload == "reset":
+                    may_be_lost.discard(q)
         elif name in mf.UNITARY_2Q:
             shape = SHAPES[name]
             for a, b in zip(qs[::2], qs[1::2]):
