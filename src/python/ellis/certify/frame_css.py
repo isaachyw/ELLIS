@@ -347,20 +347,27 @@ def _certify(flat, model, res):
     keep, sub = _prefix_state(ops, k0, n, ref, cut, used, uses, checks)
 
     # ---------------------------------------------------------------- 3. permutation gates: weighted union-find
-    parent, T = list(range(len(segs))), [I1] * len(segs)
+    parent, T, size = list(range(len(segs))), [I1] * len(segs), [1] * len(segs)
 
     def find(x):
-        """(root, T) with frame(x) = T frame(root)."""
-        if parent[x] == x:
-            return x, I1
-        r, Tp = find(parent[x])
-        parent[x], T[x] = r, T[x] * Tp
-        return r, T[x]
+        """(root, T) with frame(x) = T frame(root); compresses the path."""
+        path = []
+        while parent[x] != x:
+            path.append(x)
+            x = parent[x]
+        to_root = I1
+        for y in reversed(path):
+            to_root = T[y] * to_root
+            parent[y], T[y] = x, to_root
+        return x, (T[path[0]] if path else I1)
 
     for sa, sb, M, why in perms:
         (ra, Ta), (rb, Tb) = find(sa), find(sb)
         if ra != rb:
-            parent[rb], T[rb] = ra, Tb.inverse() * M * Ta
+            link = Tb.inverse() * M * Ta                         # frame(rb) = link frame(ra)
+            if size[ra] < size[rb]:
+                ra, rb, link = rb, ra, link.inverse()
+            parent[rb], T[rb], size[ra] = ra, link, size[ra] + size[rb]
         elif not _is_pauli((M * Ta).inverse() * Tb):
             raise _Fail(f"{why}: closes a loop that needs a non-Pauli frame change")
 
@@ -379,17 +386,19 @@ def _certify(flat, model, res):
             q, k, kind = segs[r]
             raise _Fail(f"qubit {q} (segment from {kind} at {k}) needs all three axes: {why_axis[r][:4]}")
     first = {r: min(d) for r, d in axes.items()}
-    pp, par = {}, {}
+    pp, par, psize = {}, {}, {}
 
     def pfind(x):
         """(component, beta): beta = 1 iff the group's first axis carries the Z channel, relative to the component."""
-        if pp.setdefault(x, x) == x:
-            par.setdefault(x, 0)
-            return x, 0
-        r, s = pfind(pp[x])
-        pp[x] = r
-        par[x] ^= s
-        return r, par[x]
+        path = []
+        while pp.setdefault(x, x) != x:
+            path.append(x)
+            x = pp[x]
+        to_root = 0
+        for y in reversed(path):
+            to_root ^= par[y]
+            pp[y], par[y] = x, to_root
+        return x, (par[path[0]] if path else 0)
 
     for (sa, Aa, P), (sb, Ab, Q), why in ctrls:
         (ra, la), (rb, lb) = root_axis(sa, Aa, P), root_axis(sb, Ab, Q)
@@ -399,7 +408,9 @@ def _certify(flat, model, res):
             if sx ^ sy != c:
                 raise _Fail(f"{why}: conflicting channel roles")
         else:
-            pp[y], par[y] = x, sx ^ sy ^ c
+            if psize.get(x, 1) < psize.get(y, 1):
+                x, y = y, x
+            pp[y], par[y], psize[x] = x, sx ^ sy ^ c, psize.get(x, 1) + psize.get(y, 1)
     res.groups = len({find(s)[0] for s in range(len(segs))})
 
     def frame_class(r, flips, alt):

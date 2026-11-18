@@ -251,3 +251,15 @@ def test_prefix_entangles_qubits_no_later_gate_links(readout):
     rel = frame_css(c, ANY)
     assert rel.verdict == "frame-css"
     assert check_reference(c, rel.reference, loss_family(c, slots=loss_locations(c, ANY), pairs=True)) == []
+
+
+def test_long_swap_chain_neither_recurses_nor_slows_down():
+    # each SWAP ties the next segment's frame to the previous one: a union-find chain 3000 deep
+    n = 3000
+    c = stim.Circuit(f"R {' '.join(map(str, range(n)))}")
+    for q in range(n - 1):
+        c.append("TICK")
+        c.append("SWAP", [q + 1, q])
+    c.append("M", list(range(n)))
+    rel = frame_css(c, ANY)
+    assert rel.verdict == "frame-css" and not rel.reference.any()
