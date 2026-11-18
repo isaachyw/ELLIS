@@ -654,6 +654,9 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
         """Discard q's state into a fresh qubit that nothing touches again (a partial trace: Stim's own reset
         would collapse q's partners onto a random branch), then prepare the + eigenstate of axis."""
         nonlocal spare
+        if sim.peek_x(q) or sim.peek_y(q) or sim.peek_z(q):       # q is unentangled: Stim's reset touches nothing else
+            sim.do(stim.Circuit(f"R{'' if axis == 'Z' else axis} {q}"))
+            return
         sim.set_num_qubits(spare + 1)
         sim.swap(q, spare)
         spare += 1
