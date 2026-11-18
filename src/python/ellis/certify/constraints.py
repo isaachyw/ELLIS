@@ -110,6 +110,21 @@ def _noiseless(circuit: stim.Circuit) -> stim.Circuit:
     return out
 
 
+def _one_target_per_measure_reset(circuit: stim.Circuit) -> stim.Circuit:
+    """Stim 1.16's flow_generators reads `MR q q` (one instruction measuring and resetting q twice) as if both
+    readouts came before one reset, reporting rec[0] xor rec[1] as deterministic; its simulator, correctly, makes
+    the second readout deterministic instead.  A TICK between single-target measure-resets keeps them apart."""
+    out = stim.Circuit()
+    for inst in circuit:
+        if inst.name.startswith("MR"):
+            for t in inst.targets_copy():
+                out.append("TICK")
+                out.append(inst.name, [t], inst.gate_args_copy(), tag=inst.tag)
+        else:
+            out.append(inst)
+    return out
+
+
 def constraints(circuit: stim.Circuit, losses, reload: bool = False):
     """Exact sign constraints of the lossy circuit C_s: a basis of its deterministic parities y (as int
     bitmasks over measurement indices) with their values sigma_s(y), for the Pauli-stripped reference
@@ -117,7 +132,7 @@ def constraints(circuit: stim.Circuit, losses, reload: bool = False):
     with no X/Y on the input (every qubit starts in |0>) and no output Pauli; the values come from one
     noiseless record of C_s."""
     # rebuild first (loss patterns are keyed by the circuit's own instruction indices), then strip
-    cs = _noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, losses, reload)))
+    cs = _one_target_per_measure_reset(_noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, losses, reload))))
     n = cs.num_qubits
     ref_int = _as_int(cs.reference_sample())
     piv, rows = {}, []

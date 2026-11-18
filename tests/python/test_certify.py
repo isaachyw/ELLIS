@@ -309,3 +309,13 @@ def test_prefix_generators_keep_their_signs():
     # and frames exist only if the minus sign is seen (found by the oracle suite)
     c = stim.Circuit("H[noiseless] 1\nCX[noiseless] 1 3\nS[noiseless] 1 1\nH 3\nSQRT_Y_DAG 3\nH 1\nSQRT_Y 1\nSWAP 3 1")
     assert frame_css(c, ANY).verdict == "frame-css"
+
+
+@pytest.mark.parametrize("reset", ["MR", "MRX", "MRY"])
+def test_constraints_read_fused_measure_resets_in_order(reset):
+    # Stim fuses two measure-resets of one qubit into `MR 0 0`; the second readout is the deterministic one
+    c = stim.Circuit(f"R 0 1\nH 0\nCX 0 1\n{reset} 0\n{reset} 0")    # half a Bell pair: random in every basis
+    assert len(c) == 4, "premise: Stim fused the two measure-resets"
+    samples = c.compile_sampler(seed=1).sample(500)
+    assert len(set(samples[:, 1])) == 1 and len(set(samples[:, 0])) == 2
+    assert [(y, v) for y, v in constraints(c, {})] == [(0b10, 0)]
