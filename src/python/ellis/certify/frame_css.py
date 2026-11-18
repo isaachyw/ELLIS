@@ -246,7 +246,7 @@ def _certify(flat, model, res):
     # instruction.  A certificate depends on loss timing only through the prefix end and the reload points, and
     # reloads are checked after every gate below, so only the instruction that ends the prefix must not repeat a
     # qubit.
-    end = ops[k0] if k0 >= 0 else None
+    end = ops[k0] if locations and k0 >= 0 else None          # with no loss location the prefix is everything
     if end is not None and not _frame_free(end):
         qs = [t.value for t in end.targets_copy()]
         if len(set(qs)) < len(qs):

@@ -355,3 +355,9 @@ def test_fused_gates_after_the_prefix_keep_a_valid_reference():
     assert rel.verdict == frame_css(split, ANY).verdict == "frame-css"
     fam = loss_family(split, slots=loss_locations(split, ANY), pairs=True)
     assert check_reference(split, rel.reference, fam) == []
+
+
+def test_circuit_without_loss_locations_is_all_prefix():
+    # no two-qubit gate, so no loss can happen under 2q: the fused last instruction does not end a prefix
+    c = stim.Circuit("RX 0\nMX 0\nSQRT_Y 0 0")
+    assert frame_css(c, LossModel(reload="anywhere")).verdict == "frame-css"
