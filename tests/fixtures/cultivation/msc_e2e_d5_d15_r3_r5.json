@@ -1,0 +1,53 @@
+{
+  "options": {
+    "stage": "e2e",
+    "dcolor": 5,
+    "inject_style": "unitary",
+    "basis": "Y",
+    "dsurface": 15,
+    "r_growing": 3,
+    "r_end": 5
+  },
+  "num_qubits": 463,
+  "num_measurements": 2403,
+  "num_detectors": 2284,
+  "num_observables": 1,
+  "num_instructions_flat": 3880,
+  "original_gate_instruction_counts": {
+    "QUBIT_COORDS": 463,
+    "RX": 18,
+    "R": 15,
+    "TICK": 179,
+    "CX": 139,
+    "S_DAG": 3,
+    "M": 14,
+    "MX": 17,
+    "DETECTOR": 2284,
+    "S": 2,
+    "OBSERVABLE_INCLUDE": 4,
+    "MPP": 1
+  },
+  "exported_gate_instruction_counts": {
+    "QUBIT_COORDS": 463,
+    "RX": 18,
+    "R": 15,
+    "TICK": 179,
+    "CX": 509,
+    "S_DAG": 3,
+    "M": 242,
+    "MX": 17,
+    "DETECTOR": 2284,
+    "S": 2,
+    "OBSERVABLE_INCLUDE": 4,
+    "H": 142,
+    "H_YZ": 2
+  },
+  "physical_2q_pair_counts": {
+    "CX": 8559
+  },
+  "physical_2q_loss_sites": 17118,
+  "original_sha256": "404df275f2aa5b94aa8366f7c0e4900ca9d2c2fa7dcd23ec991d8f514422a8a7",
+  "exported_sha256": "688951f8d2a05c5781a04386bc2b19ec3c3d180bf409666579697757a087ab95",
+  "boundary_convention": "MPP expanded as in real_sim; all generated gates tagged noiseless",
+  "model": "Clifford Y-basis surrogate; no coherent R_Z or Pauli noise"
+}
