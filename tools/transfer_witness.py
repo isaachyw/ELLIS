@@ -68,7 +68,7 @@ def parity_value(rows, parity):
     return value
 
 
-def transfer(source, target, witness, reload):
+def transfer(source, target, witness):
     source_pairs, source_sites = physical_pairs(source)
     target_pairs, _ = physical_pairs(target)
     source_wires, target_wires = {}, {}
@@ -106,10 +106,10 @@ def transfer(source, target, witness, reload):
         indices = [target_records[source_records[j]] for j in parity]
         key = json.dumps(losses, sort_keys=True)
         if key not in cache:
-            cache[key] = constraints(target, losses, reload)
+            cache[key] = constraints(target, losses)
         assert parity_value(cache[key], indices) == expected, "mapped parity has the wrong value"
         mapped.append((losses, indices, expected))
-    verify_witness(target, mapped, reload, shots=128)
+    verify_witness(target, mapped, shots=128)
     return mapped, len(source_pairs)
 
 
@@ -122,11 +122,13 @@ def main():
     args = parser.parse_args()
     certificate = json.loads(args.source_certificate.read_text())
     assert certificate["verdict"] == "contextual", "source certificate is not contextual"
+    assert not certificate.get("reload"), ("the implicit reload at resets is gone: certify a circuit with "
+                                           "I_ERROR[reload] markers instead")
     source_path = args.source_circuit
     source_text, target_text = source_path.read_text(), args.target_circuit.read_text()
     source, target = stim.Circuit(source_text).flattened(), stim.Circuit(target_text).flattened()
-    mapped, count = transfer(source, target, certificate["witness"], certificate["reload"])
-    row = {"circuit": args.target_circuit.stem, "reload": certificate["reload"],
+    mapped, count = transfer(source, target, certificate["witness"])
+    row = {"circuit": args.target_circuit.stem, "reload": False,
            "verdict": "contextual", "method": "transferred-stage12-witness",
            "placement": "2q", "include_noiseless": False, "max_losses": None,
            "witness": mapped, "witness_verified_shots": 128, "witness_flow_verified": True,
@@ -136,8 +138,7 @@ def main():
            "matched_physical_2q_pairs": count,
            "mapping": "directed-pair occurrences; physical 2q order is preserved on each source wire"}
     args.output.mkdir(parents=True, exist_ok=True)
-    mode = "reload" if certificate["reload"] else "no_reload"
-    output = args.output / f"{args.target_circuit.stem}__{mode}__transferred.json"
+    output = args.output / f"{args.target_circuit.stem}__no_reload__transferred.json"
     output.write_text(json.dumps(row, indent=2) + "\n")
     print(json.dumps({"output": str(output), "verdict": row["verdict"],
                       "witness_rows": len(mapped), "reload": row["reload"]}), flush=True)

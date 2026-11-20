@@ -111,7 +111,7 @@ bool classify(const stim::CircuitInstruction &inst, Kind &kind) {
         case GateType::R:
         case GateType::RX:
         case GateType::RY:
-            kind = Kind::RESET;
+            kind = Kind::STIM;
             return true;
         case GateType::MPAD:
             kind = Kind::MPAD;
@@ -129,11 +129,10 @@ bool classify(const stim::CircuitInstruction &inst, Kind &kind) {
 
 }  // namespace
 
-Program compile(const stim::Circuit &circuit, bool reload, const uint8_t *reference, const ForcedLosses &forced_losses) {
+Program compile(const stim::Circuit &circuit, const uint8_t *reference, const ForcedLosses &forced_losses) {
     Program prog;
     prog.circuit = circuit.flattened();
     prog.stats = prog.circuit.compute_stats();
-    prog.reload = reload;
     prog.forced_losses = forced_losses;
     const auto &ops = prog.circuit.operations;
     for (const auto &[k, qubits] : forced_losses) {

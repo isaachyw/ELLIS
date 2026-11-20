@@ -69,7 +69,7 @@ struct MaskFrameSampler {
     maskframe::Program prog;
     Config config;
 
-    MaskFrameSampler(const py::object &circuit, bool reload, const py::object &reference,
+    MaskFrameSampler(const py::object &circuit, const py::object &reference,
                      const py::object &forced_losses, const py::object &seed, size_t batch_size, size_t simd_width)
         : config(batch_size, simd_width, seed) {
         const stim::Circuit parsed(py::str(circuit).cast<std::string>());
@@ -91,7 +91,7 @@ struct MaskFrameSampler {
                     std::to_string(parsed.count_measurements()) + ")");
             }
         }
-        prog = maskframe::compile(parsed, reload, reference.is_none() ? nullptr : ref.data(), losses);
+        prog = maskframe::compile(parsed, reference.is_none() ? nullptr : ref.data(), losses);
     }
 
     size_t batch(bool detector_mode, bool heralds) const {
@@ -217,13 +217,12 @@ Masked Pauli-frame sampler compiled from a Stim circuit with `I_ERROR[loss](p)` 
 
 Each shot runs the circuit minus every operation on a qubit after it is lost: two-qubit gates (and
 DEPOLARIZE2 / PAULI_CHANNEL_2) are dropped when either operand is lost, a lost qubit's readouts are
-heralded and replaced by uniformly random placeholder bits, and with `reload=True` resets restore
-lost qubits.  Measurements are the frame record XOR one reference record, which is exact whenever
+heralded and replaced by uniformly random placeholder bits, and `I_ERROR[reload](p)` puts a fresh |0>
+atom into an empty slot (write it before a reset to reload there).  Measurements are the frame record XOR one reference record, which is exact whenever
 that reference is a valid noiseless sample of every shot's lossy circuit (see ellis.certify).
 
 Args:
     circuit: a stim.Circuit or its text.
-    reload: resets (R, MR, ...) restore lost qubits.
     reference: reference record (one bool per measurement).  Default: Stim's reference sample of
         the circuit without loss instructions and without Pauli gates (they live in the frame).
     forced_losses: {k: [qubits]} lost in every shot right after instruction k of
@@ -232,9 +231,9 @@ Args:
     batch_size: shots simulated together per thread (a power of two >= the SIMD width); 0 = automatic.
     simd_width: 64, 128 or 256 bits; 0 = the widest compiled in.
 )DOC")
-        .def(py::init<const py::object &, bool, const py::object &, const py::object &, const py::object &, size_t,
+        .def(py::init<const py::object &, const py::object &, const py::object &, const py::object &, size_t,
                       size_t>(),
-             "circuit"_a, py::kw_only(), "reload"_a = false, "reference"_a = py::none(), "forced_losses"_a = py::none(),
+             "circuit"_a, py::kw_only(), "reference"_a = py::none(), "forced_losses"_a = py::none(),
              "seed"_a = py::none(), "batch_size"_a = 0, "simd_width"_a = 0)
         .def("sample", &MaskFrameSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false,
              "heralds"_a = true, "threads"_a = 1,
@@ -250,7 +249,6 @@ qubit.  With heralds=False only the measurements are returned.)DOC")
 Returns (detectors, observables) or, with heralds=True, (detectors, observables, heralds) where
 heralds are per measurement as in sample().)DOC")
         .def_property_readonly("reference", &MaskFrameSampler::reference)
-        .def_property_readonly("reload", [](const MaskFrameSampler &s) { return s.prog.reload; })
         .def_property_readonly("num_qubits", [](const MaskFrameSampler &s) { return s.prog.stats.num_qubits; })
         .def_property_readonly("num_measurements", [](const MaskFrameSampler &s) { return s.prog.stats.num_measurements; })
         .def_property_readonly("num_detectors", [](const MaskFrameSampler &s) { return s.prog.stats.num_detectors; })
@@ -281,10 +279,10 @@ and run through the same batching, threading and output code as MaskFrameSampler
     using ellis::reference::QueryInput;
 
     py::class_<Plan>(m, "Plan")
-        .def(py::init([](const py::iterable &skeleton, bool reload, size_t num_qubits) {
-                 return Plan(parse_skeleton(skeleton, num_qubits), reload, num_qubits);
+        .def(py::init([](const py::iterable &skeleton, size_t num_qubits) {
+                 return Plan(parse_skeleton(skeleton, num_qubits), num_qubits);
              }),
-             py::arg("skeleton"), py::arg("reload"), py::arg("num_qubits"))
+             py::arg("skeleton"), py::arg("num_qubits"))
         .def("reference", [](const Plan &plan, const Losses &losses) {
             std::string record;
             {
@@ -309,12 +307,12 @@ and run through the same batching, threading and output code as MaskFrameSampler
             return result;
         });
     py::class_<FastPlan>(m, "FastPlan")
-        .def(py::init([](const py::iterable &skeleton, bool reload, size_t num_qubits, int64_t cut, int64_t boundary,
+        .def(py::init([](const py::iterable &skeleton, size_t num_qubits, int64_t cut, int64_t boundary,
                          std::vector<uint32_t> core, const std::vector<QueryInput> &queries) {
-                 return FastPlan(parse_skeleton(skeleton, num_qubits), reload, num_qubits, cut, boundary,
+                 return FastPlan(parse_skeleton(skeleton, num_qubits), num_qubits, cut, boundary,
                                  std::move(core), queries);
              }),
-             py::arg("skeleton"), py::arg("reload"), py::arg("num_qubits"),
+             py::arg("skeleton"), py::arg("num_qubits"),
              py::arg("cut"), py::arg("boundary"), py::arg("core_qubits"), py::arg("queries"))
         .def("reference", [](const FastPlan &plan, const Losses &losses) {
             std::pair<std::string, bool> result;

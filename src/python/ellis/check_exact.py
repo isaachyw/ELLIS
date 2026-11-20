@@ -28,7 +28,7 @@ def same_distribution(a, b):
     return va.dim == vb.dim == vj.dim and vj.reduce(A[0] ^ B[0]) == 0
 
 
-def compare(circ, losses, reload, seed):
+def compare(circ, losses, seed):
     m = circ.num_measurements
     N = m + 64
     forced = stim.Circuit()
@@ -36,8 +36,8 @@ def compare(circ, losses, reload, seed):
         forced.append(inst)
         if k in losses:
             forced.append("I_ERROR", losses[k], [1.0], tag="loss")
-    a, _ = mf.sample(forced, N, seed=seed, reload=reload, reference=None)
-    b = mf.explicit_lossy_circuit(circ, losses, reload).compile_sampler(seed=seed).sample(N)
+    a, _ = mf.sample(forced, N, seed=seed, reference=None)
+    b = mf.explicit_lossy_circuit(circ, losses).compile_sampler(seed=seed).sample(N)
     A, B = to_ints(a), to_ints(b)
     va, vb, vj = Span(), Span(), Span()
     for r in A[1:]:
@@ -72,9 +72,8 @@ if __name__ == "__main__":
         fails, first = 0, None
         for t in range(trials):
             losses = random_losses(circ, rng, int(rng.integers(1, 5)), anywhere=(t % 2 == 1))
-            for reload in (False, True):
-                ok, info = compare(circ, losses, reload, seed=t)
-                if not ok:
-                    fails += 1; first = first or (losses, reload, info)
-        print(json.dumps(dict(circuit=os.path.basename(f)[:-5], trials=2 * trials, fails=fails,
+            ok, info = compare(circ, losses, seed=t)
+            if not ok:
+                fails += 1; first = first or (losses, info)
+        print(json.dumps(dict(circuit=os.path.basename(f)[:-5], trials=trials, fails=fails,
                               example=str(first)[:200] if first else None)), flush=True)

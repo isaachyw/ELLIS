@@ -259,14 +259,12 @@ def _prefix_state(flat: stim.Circuit, k0: int, reference: np.ndarray) -> list:
     return sim.stabilizers(n)
 
 
-def _may_be_lost(flat, model: LossModel, locs):
+def _may_be_lost(flat, locs):
     """lost(q, k): q may be missing just before instruction k, i.e. a loss location before k with no certain
-    refill since (a reload marker with p = 1, or with reload="reset" a reset or reset-readout)."""
+    refill (a reload marker with p = 1) since."""
     refill, by_qubit = {}, {}
     for k, inst in enumerate(flat):
-        certain = is_reload(inst) and (not inst.gate_args_copy() or inst.gate_args_copy()[0] >= 1)
-        at_reset = model.reload == "reset" and (inst.name in RESET_BASIS or inst.name.startswith("MR"))
-        if certain or at_reset:
+        if is_reload(inst) and (not inst.gate_args_copy() or inst.gate_args_copy()[0] >= 1):
             for t in inst.targets_copy():
                 refill.setdefault(t.value, []).append(k)
     for k, q in locs:
@@ -284,17 +282,28 @@ def _shift(row: int, a: int) -> int:
     return sum(1 << g for g in range(24) if (row >> MUL[a][g]) & 1)
 
 
+def _reset_or_untouched_after(flat: stim.Circuit, k: int, q: int) -> bool:
+    """Is the next operation on q after instruction k a reset, or is there none?"""
+    for inst in list(flat)[k + 1:]:
+        if inst.name in INERT or inst.name == "MPAD" or is_reload(inst) or q not in [t.value for t in inst.targets_copy()]:
+            continue
+        return inst.name in RESET_BASIS
+    return True
+
+
 def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = "literal") -> FrameProblem:
     """The frame-CSS rules of `circuit` under `model` as a constraint problem over the segments' frames.
     reload_points="literal" checks rule 4 at every reload point where the qubit may be missing: reload markers,
     and with reload="anywhere" every instruction boundary after the prefix, the end of the circuit included (and its
-    start under from_start); "live" only at those followed by a readout or two-qubit gate of the same segment."""
+    start under from_start); "live" only at those followed by a readout or two-qubit gate of the same segment.
+    Either way a reload marker whose qubit is next reset, or never touched again, is no reload point: nothing reads
+    the atom it loads."""
     assert reload_points in ("literal", "live"), reload_points
     flat = circuit.flattened()
     n, N = flat.num_qubits, len(flat)
     locs = loss_locations(flat, model)
     k0 = min((k for k, _ in locs), default=N - 1)
-    lost = _may_be_lost(flat, model, locs)
+    lost = _may_be_lost(flat, locs)
     reference = np.array(_reference_circuit(flat).reference_sample(), dtype=bool)
 
     domains, last_use, binary, readouts, reloads, reasons = [], [], [], [], [], []
@@ -335,7 +344,8 @@ def frame_problem(circuit: stim.Circuit, model: LossModel, reload_points: str = 
                 reload_point(q, k)
         if is_reload(inst):
             for t in targets:
-                reload_point(t.value, k)
+                if not _reset_or_untouched_after(flat, k, t.value):
+                    reload_point(t.value, k)
         elif name == "MPAD":
             m += len(targets)
         elif name in INERT:
@@ -519,18 +529,17 @@ def loss_patterns(circuit: stim.Circuit, model: LossModel, cap: int = 1 << 12, n
     if n_pairs is not None and n_pairs < len(pairs):
         rng = np.random.default_rng(seed)
         pairs = [pairs[int(i)] for i in rng.choice(len(pairs), n_pairs, replace=False)]
-    fam = loss_family(flat, reload=model.reload == "reset", slots=locs, n_random=n_random, seed=seed) if n_random else []
+    fam = loss_family(flat, slots=locs, n_random=n_random, seed=seed) if n_random else []
     return [{}] + [pattern([s]) for s in locs] + [pattern(c) for c in pairs] + fam
 
 
 def common_reference_failures(circuit: stim.Circuit, model: LossModel, kappa, patterns) -> list:
     """O2: the patterns s for which kappa is not a possible noiseless record of the lossy circuit C_s.  Exact for
-    reload_state="zero" with reload "marked" or "reset"; with reload="anywhere" the patterns reload only at
-    markers, a subset of the model's patterns.  Not valid for reload_state="mixed" (C_s reloads |0>)."""
+    reload_state="zero" with reload="marked"; with reload="anywhere" the patterns reload only at markers, a subset
+    of the model's patterns.  Not valid for reload_state="mixed" (C_s reloads |0>)."""
     assert model.reload_state == "zero", "constraints() reloads |0>"
     r = sum(1 << int(i) for i in np.flatnonzero(kappa))
-    reload = model.reload == "reset"
-    return [s for s in patterns if any(((y & r).bit_count() & 1) != v for y, v in constraints(circuit, s, reload))]
+    return [s for s in patterns if any(((y & r).bit_count() & 1) != v for y, v in constraints(circuit, s))]
 
 
 
@@ -538,8 +547,8 @@ def reads_reference(circuit: stim.Circuit, model: LossModel, kappa, losses: dict
     """kappa is a possible noiseless record of the lossy circuit, simulated directly (independent of
     `constraints`): losses {k: qubits lost right after instruction k, -1 before the start}; reloads {k: qubits
     refilled just before instruction k (k = len: at the end)}, only meaningful with reload="anywhere".  A refill
-    (a reload marker, a reset with reload="reset", or a boundary reload) puts |0>, or with reload_state="mixed" a
-    maximally mixed atom, into an empty slot; a lost readout is a free coin."""
+    (a reload marker or a boundary reload) puts |0>, or with reload_state="mixed" a maximally mixed atom, into an
+    empty slot; a lost readout is a free coin."""
     flat = circuit.flattened()
     sim = _Discarding(flat.num_qubits)
     lost = set(losses.get(-1, ()))
@@ -571,11 +580,8 @@ def reads_reference(circuit: stim.Circuit, model: LossModel, kappa, losses: dict
                     if q not in lost and not sim.postselect(basis, q, bool(kappa[m]) ^ t.is_inverted_result_target):
                         return False
                     m += 1
-                if name in RESET_BASIS or name.startswith("MR"):
-                    if model.reload == "reset":
-                        refill(q)
-                    if q not in lost:
-                        sim.prepare(q, basis)
+                if (name in RESET_BASIS or name.startswith("MR")) and q not in lost:
+                    sim.prepare(q, basis)
         elif name not in INERT:
             w = 2 if name in TWO_Q else 1
             qs = [t.value for t in targets]
@@ -652,6 +658,41 @@ def joined(*parts) -> stim.Circuit:
             out.append("TICK")
         out += part
     return out
+
+
+def reload_at_resets(circuit: stim.Circuit):
+    """The removed implicit reload at resets, written with markers: `I_ERROR[reload] q` just before each reset of q
+    (so the fresh |0> is then reset into the reset's basis), and each measure-reset split into readout, marker and
+    reset one target at a time (`MRX(p) !q` -> `MX(p) !q`, `I_ERROR[reload] q`, `RX q`), which keeps the record order.
+    Returns (rewritten flat circuit, move): move(losses) re-keys a loss pattern {old index: qubits} to the new
+    indices, a loss right after old instruction k becoming a loss right after the last instruction k turned into."""
+    out, end = stim.Circuit(), []
+
+    def emit(name, targets, args=(), tag=""):
+        last = out[-1] if len(out) else None
+        if (last is not None and name not in ANNOTATIONS and last.name == name and last.tag == tag
+                and last.gate_args_copy() == list(args)):
+            out.append("TICK")                            # Stim would fuse the two, moving loss slots
+        out.append(name, targets, list(args), tag=tag)
+
+    for inst in circuit.flattened():
+        name, targets, args, tag = inst.name, inst.targets_copy(), inst.gate_args_copy(), inst.tag
+        if name in RESET_BASIS:
+            emit("I_ERROR", [t.value for t in targets], tag="reload")
+            emit(name, targets, args, tag)
+        elif name in MEAS_BASIS and name.startswith("MR"):
+            for t in targets:
+                emit("M" + name[2:], [t], args, tag)
+                emit("I_ERROR", [t.value], tag="reload")
+                emit("R" + name[2:], [t.value], tag=tag)
+        else:
+            emit(name, targets, args, tag)
+        end.append(len(out) - 1)
+
+    def move(losses: dict) -> dict:
+        return {end[k] if k >= 0 else k: list(qs) for k, qs in losses.items()}
+
+    return out, move
 
 
 def _words_from(src: int, gens, ok) -> dict:

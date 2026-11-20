@@ -19,17 +19,15 @@ class CultivationReference:
 
     same_choice = False                 # the guarded suffix may choose another valid record
 
-    def __init__(self, circuit: stim.Circuit, reload: bool = False):
-        self.circuit, self.reload = circuit.flattened(), reload
+    def __init__(self, circuit: stim.Circuit):
+        self.circuit = circuit.flattened()
         mf.validate(self.circuit)
-        if any(mf.is_reload(inst) for inst in self.circuit):
-            raise ValueError("reload markers are not supported by the native reference plans")
         skeleton = mf.reference_skeleton(self.circuit)
         self.metadata = compile_plan(self.circuit)
         if self.metadata is None:
-            self.plan = _core.Plan(skeleton, reload, self.circuit.num_qubits)
+            self.plan = _core.Plan(skeleton, self.circuit.num_qubits)
         else:
-            self.plan = _core.FastPlan(skeleton, reload, self.circuit.num_qubits,
+            self.plan = _core.FastPlan(skeleton, self.circuit.num_qubits,
                                         self.metadata["cut"], self.metadata["boundary"],
                                         self.metadata["core_qubits"], self.metadata["queries"])
         self.stats = {"queries": 0, "fast": 0, "fallback": 0}

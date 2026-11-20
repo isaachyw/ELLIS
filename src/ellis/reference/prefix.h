@@ -132,10 +132,10 @@ class FastPlan : public Plan {
     }
 
   public:
-    FastPlan(std::vector<Operation> ops, bool reload, size_t num_qubits,
+    FastPlan(std::vector<Operation> ops, size_t num_qubits,
              int64_t cut, int64_t boundary, std::vector<uint32_t> core,
              const std::vector<QueryInput> &query_inputs)
-        : Plan(std::move(ops), reload, num_qubits), cut(cut), boundary(boundary),
+        : Plan(std::move(ops), num_qubits), cut(cut), boundary(boundary),
           core(std::move(core)), core_index(num_qubits, -1) {
         supported = this->core.size() <= 64 && cut <= boundary;
         for (size_t i = 0; i < this->core.size(); ++i) {
@@ -149,6 +149,7 @@ class FastPlan : public Plan {
             if (op.kind == Kind::Pad || op.kind == Kind::Measurement) {
                 num_records += op.targets.size();
             }
+            if (op.kind == Kind::Reload && op.index >= boundary) supported = false;  // terminal queries assume no reload
             if (op.index >= boundary || op.kind == Kind::Pad) continue;
             if (op.index >= cut && !css_gate(op.gate)) supported = false;
             const size_t stride = op.kind == Kind::Two ? 2 : 1;
@@ -200,13 +201,21 @@ class FastPlan : public Plan {
                 for (const auto &target : op.targets) record[slot++] = target.qubit_value();
                 continue;
             }
-            if (reload && op.reset) {
-                for (const auto &target : op.targets) lost[target.qubit_value()] = 0;
+            if (op.kind == Kind::Reload) {  // a fresh |0> atom in each empty slot
+                for (const auto &target : op.targets) {
+                    const uint32_t q = target.qubit_value();
+                    if (!lost[q]) continue;
+                    lost[q] = 0;
+                    if (core_index[q] >= 0) {
+                        const auto t = stim::GateTarget::qubit(core_index[q]);
+                        sim.do_gate({stim::GateType::R, {}, &t, ""});
+                    }
+                }
+                continue;
             }
             const size_t stride = op.kind == Kind::Two ? 2 : 1;
             for (size_t start = 0; start < op.targets.size(); start += stride) {
                 const auto &target = op.targets[start];
-                const uint32_t q = target.qubit_value();
                 bool present = true;
                 targets.clear();
                 for (size_t j = 0; j < stride; ++j) {
@@ -219,13 +228,6 @@ class FastPlan : public Plan {
                 }
                 if (op.kind == Kind::Measurement && !present) {
                     ++slot; // A lost readout is the zero reference coin.
-                    if (reload && op.measure_reset) {
-                        lost[q] = 0;
-                        if (!targets.empty()) {
-                            targets[0] = stim::GateTarget::qubit(core_index[q]);
-                            sim.do_gate({op.reset_gate, {}, targets, ""});
-                        }
-                    }
                 } else if (present) {
                     if (!targets.empty()) sim.do_gate({op.gate, {}, targets, ""});
                     if (op.kind == Kind::Measurement) {
@@ -253,8 +255,15 @@ class FastPlan : public Plan {
                 for (const auto &target : op.targets) record[slot++] = target.qubit_value();
                 continue;
             }
-            if (reload && op.reset) {
-                for (const auto &target : op.targets) lost[target.qubit_value()] = 0;
+            if (op.kind == Kind::Reload) {  // a fresh |0> atom: no frame Pauli, as after a reset
+                for (const auto &target : op.targets) {
+                    const uint32_t q = target.qubit_value();
+                    if (lost[q]) {
+                        lost[q] = 0;
+                        px[q] = pz[q] = 0;
+                    }
+                }
+                continue;
             }
             if (op.kind == Kind::Measurement) {
                 for (const auto &target : op.targets) {
@@ -264,10 +273,7 @@ class FastPlan : public Plan {
                         record[slot] = (x_measure ? pz[q] : px[q]) ^ target.is_inverted_result_target();
                     }
                     ++slot;
-                    if (op.measure_reset && (!lost[q] || reload)) {
-                        lost[q] = 0;
-                        px[q] = pz[q] = 0;
-                    }
+                    if (op.measure_reset && !lost[q]) px[q] = pz[q] = 0;
                 }
             } else if (op.reset) {
                 for (const auto &target : op.targets) {

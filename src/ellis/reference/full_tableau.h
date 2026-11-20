@@ -17,7 +17,7 @@ namespace ellis::reference {
 
 using Losses = std::map<int64_t, std::vector<uint32_t>>;
 
-enum class Kind { One, Two, Measurement, Pad };
+enum class Kind { One, Two, Measurement, Pad, Reload };
 
 struct Operation {
     int64_t index;
@@ -26,23 +26,20 @@ struct Operation {
     std::vector<stim::GateTarget> targets;
     bool reset;
     bool measure_reset;
-    stim::GateType reset_gate;
 };
 
-// One entry of frame.reference_skeleton: kind is "one", "two", "meas" or "pad"; a target is
-// (qubit, inverted), and only readouts may be inverted.
+// One entry of frame.reference_skeleton: kind is "one", "two", "meas", "pad" or "reload" (an
+// `I_ERROR[reload]` marker, name "R"); a target is (qubit, inverted), and only readouts may be inverted.
 inline Operation make_operation(int64_t index, const std::string &kind_name, const std::string &name,
                                 const std::vector<std::pair<uint32_t, bool>> &targets, size_t num_qubits) {
-    const auto kind = kind_name == "pad"    ? Kind::Pad
-                      : kind_name == "meas" ? Kind::Measurement
-                      : kind_name == "two"  ? Kind::Two
-                                             : Kind::One;
-    const bool reset = name == "R" || name == "RX" || name == "RY";
+    const auto kind = kind_name == "pad"      ? Kind::Pad
+                      : kind_name == "meas"   ? Kind::Measurement
+                      : kind_name == "two"    ? Kind::Two
+                      : kind_name == "reload" ? Kind::Reload
+                                               : Kind::One;
+    const bool reset = kind == Kind::One && (name == "R" || name == "RX" || name == "RY");
     const bool measure_reset = name == "MR" || name == "MRX" || name == "MRY";
-    const auto reset_gate = name == "MRX" ? stim::GateType::RX
-                            : name == "MRY" ? stim::GateType::RY
-                                            : stim::GateType::R;
-    Operation op{index, kind, stim::GATE_DATA.at(name).id, {}, reset, measure_reset, reset_gate};
+    Operation op{index, kind, stim::GATE_DATA.at(name).id, {}, reset, measure_reset};
     for (const auto &[q, inverted] : targets) {
         if (kind != Kind::Pad && q >= num_qubits) {
             throw std::invalid_argument("instruction target is outside the circuit");
@@ -55,7 +52,6 @@ inline Operation make_operation(int64_t index, const std::string &kind_name, con
 class Plan {
   protected:
     std::vector<Operation> operations;
-    bool reload;
     size_t num_qubits;
 
     void validate_losses(const Losses &losses) const {
@@ -70,8 +66,7 @@ class Plan {
     }
 
   public:
-    Plan(std::vector<Operation> ops, bool reload, size_t num_qubits)
-        : operations(std::move(ops)), reload(reload), num_qubits(num_qubits) {}
+    Plan(std::vector<Operation> ops, size_t num_qubits) : operations(std::move(ops)), num_qubits(num_qubits) {}
 
     std::string reference(const Losses &losses) const {
         validate_losses(losses);
@@ -91,6 +86,16 @@ class Plan {
                 sim.do_gate({op.gate, {}, op.targets, ""});
                 continue;
             }
+            if (op.kind == Kind::Reload) {  // a fresh |0> atom in each empty slot
+                for (const auto &target : op.targets) {
+                    const uint32_t q = target.qubit_value();
+                    if (lost[q]) {
+                        lost[q] = 0;
+                        sim.do_gate({stim::GateType::R, {}, &target, ""});
+                    }
+                }
+                continue;
+            }
             if (op.kind == Kind::Measurement) {
                 kept.clear();
                 auto flush_measurements = [&]() {
@@ -106,20 +111,10 @@ class Plan {
                     } else {
                         flush_measurements();
                         sim.measurement_record.record_result(false);
-                        if (reload && op.measure_reset) {
-                            lost[q] = 0;
-                            const auto plain = stim::GateTarget::qubit(q);
-                            sim.do_gate({op.reset_gate, {}, &plain, ""});
-                        }
                     }
                 }
                 flush_measurements();
                 continue;
-            }
-            if (reload && op.reset) {
-                for (const auto &target : op.targets) {
-                    lost[target.qubit_value()] = 0;
-                }
             }
             kept.clear();
             const size_t stride = op.kind == Kind::Two ? 2 : 1;
