@@ -54,29 +54,3 @@ class StimSampler:
     def simd_width(self) -> int: ...
     @property
     def batch_size(self) -> int: ...
-
-type LossPattern = dict[int, list[int]]
-type QueryInput = tuple[int, list[int], str, int, bool]
-
-class Plan:
-    """Exact noiseless reference of each loss pattern from the full tableau of its surviving circuit."""
-
-    def __init__(self, skeleton: Any, num_qubits: int) -> None: ...
-    def reference(self, losses: LossPattern) -> bytes: ...
-    def batch_reference(self, patterns: list[LossPattern]) -> list[bytes]: ...
-
-class FastPlan:
-    """MSC S-proxy reference: prefix tableau, phase check, CSS gauge sweep and terminal queries, with the full
-    tableau as the exact fallback.  reference() returns (record, fast path taken)."""
-
-    def __init__(
-        self,
-        skeleton: Any,
-        num_qubits: int,
-        cut: int,
-        boundary: int,
-        core_qubits: list[int],
-        queries: list[QueryInput],
-    ) -> None: ...
-    def reference(self, losses: LossPattern) -> tuple[bytes, bool]: ...
-    def batch_reference(self, patterns: list[LossPattern]) -> list[tuple[bytes, bool]]: ...

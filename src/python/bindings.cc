@@ -1,5 +1,4 @@
-// Python bindings, ellis._core: the masked-frame sampler (MaskFrameSampler, StimSampler) and the exact
-// per-loss-pattern references of ellis.msc (Plan, FastPlan).
+// Python bindings, ellis._core: the masked-frame sampler (MaskFrameSampler, StimSampler).
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -10,8 +9,6 @@
 #include "ellis/frame/program.h"
 #include "ellis/frame/rng.h"
 #include "ellis/frame/sampler.h"
-#include "ellis/reference/full_tableau.h"
-#include "ellis/reference/prefix.h"
 #include "stim/simulators/tableau_simulator.h"
 
 namespace py = pybind11;
@@ -185,27 +182,6 @@ struct StimSampler {
     }
 };
 
-// frame.reference_skeleton(): (index, kind, gate name, targets); a readout target is (qubit, inverted).
-std::vector<ellis::reference::Operation> parse_skeleton(const py::iterable &skeleton, size_t num_qubits) {
-    std::vector<ellis::reference::Operation> ops;
-    for (const py::handle item : skeleton) {
-        const auto entry = py::reinterpret_borrow<py::tuple>(item);
-        const auto kind = entry[1].cast<std::string>();
-        std::vector<std::pair<uint32_t, bool>> targets;
-        for (const py::handle target : entry[3]) {
-            if (kind == "meas") {
-                const auto pair = py::reinterpret_borrow<py::tuple>(target);
-                targets.emplace_back(pair[0].cast<uint32_t>(), pair[1].cast<bool>());
-            } else {
-                targets.emplace_back(py::cast<uint32_t>(target), false);
-            }
-        }
-        ops.push_back(ellis::reference::make_operation(entry[0].cast<int64_t>(), kind, entry[2].cast<std::string>(),
-                                                       targets, num_qubits));
-    }
-    return ops;
-}
-
 }  // namespace
 
 PYBIND11_MODULE(_core, m) {
@@ -272,65 +248,4 @@ and run through the same batching, threading and output code as MaskFrameSampler
              "threads"_a = 1)
         .def_property_readonly("simd_width", [](const StimSampler &s) { return s.config.simd_width; })
         .def_property_readonly("batch_size", &StimSampler::batch);
-
-    using ellis::reference::FastPlan;
-    using ellis::reference::Losses;
-    using ellis::reference::Plan;
-    using ellis::reference::QueryInput;
-
-    py::class_<Plan>(m, "Plan")
-        .def(py::init([](const py::iterable &skeleton, size_t num_qubits) {
-                 return Plan(parse_skeleton(skeleton, num_qubits), num_qubits);
-             }),
-             py::arg("skeleton"), py::arg("num_qubits"))
-        .def("reference", [](const Plan &plan, const Losses &losses) {
-            std::string record;
-            {
-                py::gil_scoped_release release;
-                record = plan.reference(losses);
-            }
-            return py::bytes(record);
-        })
-        .def("batch_reference", [](const Plan &plan, const std::vector<Losses> &patterns) {
-            std::vector<std::string> records;
-            records.reserve(patterns.size());
-            {
-                py::gil_scoped_release release;
-                for (const Losses &losses : patterns) {
-                    records.push_back(plan.reference(losses));
-                }
-            }
-            py::list result;
-            for (const std::string &record : records) {
-                result.append(py::bytes(record));
-            }
-            return result;
-        });
-    py::class_<FastPlan>(m, "FastPlan")
-        .def(py::init([](const py::iterable &skeleton, size_t num_qubits, int64_t cut, int64_t boundary,
-                         std::vector<uint32_t> core, const std::vector<QueryInput> &queries) {
-                 return FastPlan(parse_skeleton(skeleton, num_qubits), num_qubits, cut, boundary,
-                                 std::move(core), queries);
-             }),
-             py::arg("skeleton"), py::arg("num_qubits"),
-             py::arg("cut"), py::arg("boundary"), py::arg("core_qubits"), py::arg("queries"))
-        .def("reference", [](const FastPlan &plan, const Losses &losses) {
-            std::pair<std::string, bool> result;
-            {
-                py::gil_scoped_release release;
-                result = plan.reference_fast(losses);
-            }
-            return py::make_tuple(py::bytes(result.first), result.second);
-        })
-        .def("batch_reference", [](const FastPlan &plan, const std::vector<Losses> &patterns) {
-            std::vector<std::pair<std::string, bool>> records;
-            records.reserve(patterns.size());
-            {
-                py::gil_scoped_release release;
-                for (const Losses &losses : patterns) records.push_back(plan.reference_fast(losses));
-            }
-            py::list result;
-            for (const auto &record : records) result.append(py::make_tuple(py::bytes(record.first), record.second));
-            return result;
-        });
 }

@@ -14,9 +14,6 @@ tableau reference.
   model. An explicit `LossModel` overrides both. `frame_css` decides frame-CSS exactly; a circuit outside the
   assumptions that make the decision exact (classical feedback, multi-qubit measurements, a prefix with
   too many open frame choices) gets verdict `"outside-assumptions"` instead.
-- **MSC S-proxy references.** `ellis.msc.reference.CultivationReference` computes a reference for each loss pattern
-  from a small prefix tableau and a CSS gauge sweep, and falls back to the full tableau when its checks
-  fail.
 
 ## Sampling performance
 
@@ -55,16 +52,6 @@ sampler = frame.compile_sampler(circuit, reference=cert.reference, seed=1)
 dets, obs = sampler.sample_detectors(10**6, bit_packed=True, threads=8)
 ```
 
-For a circuit without a common reference, such as an MSC S-proxy circuit, pass a per-shot provider to the
-numpy sampler:
-
-```python
-from ellis.msc.reference import CultivationReference
-
-provider = CultivationReference(circuit, reload=False)
-meas, heralds = frame.sample(circuit, 1000, reference_provider=provider)
-```
-
 `ellis.sinter.masked(decoder)` is a `sinter.Sampler`. It samples with the masked frame and decodes with any
 sinter decoder.
 
@@ -73,9 +60,8 @@ sinter decoder.
 | Path | Contents |
 |---|---|
 | `src/ellis/frame/` | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler |
-| `src/ellis/reference/` | C++ exact references for a loss pattern: full tableau (`Plan`) and MSC prefix (`FastPlan`) |
 | `src/python/bindings.cc` | the `ellis._core` module |
-| `src/python/ellis/` | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `msc/`, `noise`, `sinter`, `gf2`, `check_exact` |
+| `src/python/ellis/` | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact` |
 | `tests/python/` | tests against Stim on explicit lossy circuits; fixtures in `tests/fixtures/` |
 | `tools/` | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters |
 | `cmake/` | Stim fetch, compiler selection, SIMD flags |
