@@ -1,4 +1,10 @@
-# ELLIS
+<p align="center">
+  <img src="docs/assets/logos/ellis-logo-light.png" width="220" alt="ELLIS logo">
+</p>
+
+# ELLIS: Extremely Fast Quantum Circuit Simulation under Qubit Loss and Leakage
+
+[![arXiv](https://img.shields.io/badge/Paper-2611.26173-B31B1B?style=flat-square)](https://arxiv.org/abs/2611.26173)
 
 ELLIS (Efficient Loss and Leakage Invariant-reference Simulation) samples Clifford circuits with atom loss
 exactly. It uses a masked Pauli frame and one shared reference record, so each shot does not need its own
@@ -14,6 +20,25 @@ tableau reference.
   model. An explicit `LossModel` overrides both. `frame_css` decides frame-CSS exactly; a circuit outside the
   assumptions that make the decision exact (classical feedback, multi-qubit measurements, a prefix with
   too many open frame choices) gets verdict `"outside-assumptions"` instead.
+
+## Loss instructions
+
+ELLIS reads Stim circuits and adds two tagged `I_ERROR` instructions. Stim parses both and ignores them.
+
+| Instruction | Meaning |
+|---|---|
+| `I_ERROR[loss](p) q...` | Each atom `q` is lost with probability `p`. Its later gates are dropped and its readouts become fair coins. |
+| `I_ERROR[reload](p) q...` | Each empty slot `q` gets a fresh atom in \|0> with probability `p` (default 1). A present atom is left alone. |
+
+A reload happens only where its marker stands. To reload at a reset, write the marker just before it:
+
+```
+CX 0 1
+I_ERROR[loss](0.001) 0 1
+M 1
+I_ERROR[reload] 1
+R 1
+```
 
 ## Sampling performance
 
@@ -72,4 +97,20 @@ sinter decoder.
 uv run pytest
 uv run python -m ellis.check_exact 'tests/fixtures/lightstim/*.stim'   # sampler vs Stim on random loss patterns
 uv run python tools/classify_lightstim.py --benchmark                  # paper App. C classification
+```
+
+## Citation
+
+If you find ELLIS useful in your work, please cite our paper:
+
+```bibtex
+@misc{hou2026ellis,
+      title={Ellis: Extremely Fast Quantum Circuit Simulation under Qubit Loss and Leakage},
+      author={Yuewen Hou and Gokul Subramanian Ravi},
+      year={2026},
+      eprint={2611.26173},
+      archivePrefix={arXiv},
+      primaryClass={quant-ph},
+      url={https://arxiv.org/abs/2611.26173},
+}
 ```
