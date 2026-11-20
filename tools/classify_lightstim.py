@@ -1,7 +1,7 @@
 """Certify one reference record for the masked Pauli frame under atom loss (ellis.certify).
 
 usage: python tools/classify_lightstim.py [CIRCUIT.stim ...] [--benchmark] [--only SUBSTR ...]
-           [--after 2q|any] [--from-start] [--reload marked|reset|anywhere] [--noiseless-loss] [--pairs]
+           [--after 2q|any] [--from-start] [--reload marked|anywhere] [--noiseless-loss] [--pairs]
            [--random N] [--max-losses K]
            [--seed S] [--workers N] [--save DIR]
 
@@ -9,7 +9,8 @@ Prints one JSON line per circuit: verdict ("proven" / "contextual" / "consistent
 reference (number of ones), the gauge size, a minimal witness when contextual, and timing.  Every verdict is for
 the loss model the flags define (ellis.certify.LossModel): losses after two-qubit gates (--after 2q) or after
 every operation (--after any), optionally before the first operation (--from-start) and at `noiseless`
-operations (--noiseless-loss); reload at I_ERROR[reload] markers, also at resets, or anywhere.
+operations (--noiseless-loss); reload at I_ERROR[reload] markers or anywhere (to reload at the resets, put a marker
+before each reset).
 --benchmark takes one circuit per LightStim protocol from tests/fixtures/lightstim (paper App. C).
 --save DIR writes DIR/<name>.cert.npz with the reference (and the witness or gauge as JSON text).
 """
@@ -40,7 +41,7 @@ def main():
     ap.add_argument("--only", nargs="*", default=None, help="keep circuits whose name contains one of these")
     ap.add_argument("--after", choices=("2q", "any"), default="2q")
     ap.add_argument("--from-start", action="store_true")
-    ap.add_argument("--reload", choices=("marked", "reset", "anywhere"), default="marked")
+    ap.add_argument("--reload", choices=("marked", "anywhere"), default="marked")
     ap.add_argument("--noiseless-loss", action="store_true", help="also lose atoms at `noiseless`-tagged gates")
     ap.add_argument("--pairs", action="store_true", help="search every pair of single losses")
     ap.add_argument("--random", type=int, default=1000, help="random multi-loss patterns in the search")

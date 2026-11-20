@@ -29,24 +29,23 @@ def loss_slots(circuit: stim.Circuit, placement: str = "2q", include_noiseless: 
     return slots
 
 
-def _events(circuit: stim.Circuit, reload: bool):
-    """Per qubit, the instruction indices a loss can act through: two-qubit gates, readouts, reload markers,
-    and (with reload) resets."""
+def _events(circuit: stim.Circuit):
+    """Per qubit, the instruction indices a loss can act through: two-qubit gates, readouts, reload markers."""
     ev = {}
     for k, inst in enumerate(circuit.flattened()):
         name = inst.name
-        if name in mf.UNITARY_2Q or name in mf.MEAS or mf.is_reload(inst) or (reload and name in mf.RESET):
+        if name in mf.UNITARY_2Q or name in mf.MEAS or mf.is_reload(inst):
             for t in inst.targets_copy():
                 if t.is_qubit_target:
                     ev.setdefault(t.value, []).append(k)
     return ev
 
 
-def representative_slots(circuit: stim.Circuit, slots, reload: bool = False):
+def representative_slots(circuit: stim.Circuit, slots):
     """One slot per ghost-equivalence class: (k, q) and (k', q) are equivalent when no event of q lies in
     between, because then the same later operations of q are dropped.  Slots after q's last event (losing
     an atom that does nothing afterwards) change nothing and are removed."""
-    ev, seen, reps = _events(circuit, reload), set(), []
+    ev, seen, reps = _events(circuit), set(), []
     for k, q in slots:
         nxt = next((e for e in ev.get(q, ()) if e > k), None)
         if nxt is None or (q, nxt) in seen:
@@ -59,7 +58,6 @@ def representative_slots(circuit: stim.Circuit, slots, reload: bool = False):
 def loss_family(
     circuit: stim.Circuit,
     placement: str = "2q",
-    reload: bool = False,
     include_noiseless: bool = False,
     pairs: bool = False,
     n_random: int = 1000,
@@ -72,7 +70,7 @@ def loss_family(
     slots: the loss locations, default loss_slots(circuit, placement, include_noiseless)."""
     if slots is None:
         slots = loss_slots(circuit, placement, include_noiseless)
-    reps = representative_slots(circuit, slots, reload)
+    reps = representative_slots(circuit, slots)
     fam = [{}] + [{k: [q]} for k, q in reps]
     if pairs:
         fam += [_pattern((a, b)) for i, a in enumerate(reps) for b in reps[i + 1 :] if a[1] != b[1]]
@@ -110,14 +108,29 @@ def _noiseless(circuit: stim.Circuit) -> stim.Circuit:
     return out
 
 
-def constraints(circuit: stim.Circuit, losses, reload: bool = False):
+def _one_target_per_measure_reset(circuit: stim.Circuit) -> stim.Circuit:
+    """Stim 1.16's flow_generators reads `MR q q` (one instruction measuring and resetting q twice) as if both
+    readouts came before one reset, reporting rec[0] xor rec[1] as deterministic; its simulator, correctly, makes
+    the second readout deterministic instead.  A TICK between single-target measure-resets keeps them apart."""
+    out = stim.Circuit()
+    for inst in circuit:
+        if inst.name.startswith("MR"):
+            for t in inst.targets_copy():
+                out.append("TICK")
+                out.append(inst.name, [t], inst.gate_args_copy(), tag=inst.tag)
+        else:
+            out.append(inst)
+    return out
+
+
+def constraints(circuit: stim.Circuit, losses):
     """Exact sign constraints of the lossy circuit C_s: a basis of its deterministic parities y (as int
     bitmasks over measurement indices) with their values sigma_s(y), for the Pauli-stripped reference
     circuit the masked frame uses.  From Stim's flow generators (no sampling): the parities are the flows
     with no X/Y on the input (every qubit starts in |0>) and no output Pauli; the values come from one
     noiseless record of C_s."""
     # rebuild first (loss patterns are keyed by the circuit's own instruction indices), then strip
-    cs = _noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, losses, reload)))
+    cs = _one_target_per_measure_reset(_noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, losses))))
     n = cs.num_qubits
     ref_int = _as_int(cs.reference_sample())
     piv, rows = {}, []
@@ -152,10 +165,10 @@ def _as_int(record) -> int:
     return sum(1 << int(i) for i in np.flatnonzero(record))  # Python ints: records exceed 64 bits
 
 
-def check_reference(circuit: stim.Circuit, reference, family, reload: bool = False):
+def check_reference(circuit: stim.Circuit, reference, family):
     """Loss patterns of the family for which the plain masked frame with this reference is NOT exact."""
     r = _as_int(reference)
-    return [s for s in family if any(((y & r).bit_count() & 1) != v for y, v in constraints(circuit, s, reload))]
+    return [s for s in family if any(((y & r).bit_count() & 1) != v for y, v in constraints(circuit, s))]
 
 
 # ------------------------------------------------------------------ GF(2) system with provenance
@@ -204,22 +217,22 @@ def _contradiction(rows_by_context):
 _WORKER = {}
 
 
-def _init_worker(text: str, reload: bool):
-    _WORKER["circuit"], _WORKER["reload"] = stim.Circuit(text), reload
+def _init_worker(text: str):
+    _WORKER["circuit"] = stim.Circuit(text)
 
 
 def _worker_constraints(losses):
-    return constraints(_WORKER["circuit"], losses, _WORKER["reload"])
+    return constraints(_WORKER["circuit"], losses)
 
 
-def _constraint_stream(circuit: stim.Circuit, family, reload: bool, workers: int):
+def _constraint_stream(circuit: stim.Circuit, family, workers: int):
     """constraints() of each loss pattern, in family order, from `workers` processes when workers > 1."""
     if workers <= 1:
-        yield from (constraints(circuit, s, reload) for s in family)
+        yield from (constraints(circuit, s) for s in family)
         return
     from concurrent.futures import ProcessPoolExecutor
 
-    with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(str(circuit), reload)) as ex:
+    with ProcessPoolExecutor(workers, initializer=_init_worker, initargs=(str(circuit),)) as ex:
         try:
             yield from ex.map(_worker_constraints, family, chunksize=max(1, min(16, len(family) // (4 * workers))))
         finally:
@@ -229,15 +242,15 @@ def _constraint_stream(circuit: stim.Circuit, family, reload: bool, workers: int
 class _Search:
     """Incremental exact search: the GF(2) system of the sign constraints of every loss pattern added so far."""
 
-    def __init__(self, circuit: stim.Circuit, reload: bool = False, workers: int = 1):
-        self.circuit, self.reload, self.workers = circuit, reload, workers
+    def __init__(self, circuit: stim.Circuit, workers: int = 1):
+        self.circuit, self.workers = circuit, workers
         self.family, self.sys = [], _System(cover=True)
 
     def extend(self, patterns):
         """Add loss patterns; returns None, or a minimal witness as soon as the system contradicts itself."""
         start = len(self.family)
         self.family += list(patterns)
-        stream = _constraint_stream(self.circuit, self.family[start:], self.reload, self.workers)
+        stream = _constraint_stream(self.circuit, self.family[start:], self.workers)
         try:
             for i, rows in enumerate(stream, start):
                 for y, v in rows:
@@ -253,7 +266,7 @@ class _Search:
 
         def rows_of(j):
             if j not in cache:
-                cache[j] = constraints(self.circuit, self.family[j], self.reload)
+                cache[j] = constraints(self.circuit, self.family[j])
             return cache[j]
 
         return rows_of
@@ -264,21 +277,21 @@ class _Search:
         return np.array([(r >> j) & 1 for j in range(self.circuit.num_measurements)], bool)
 
 
-def search(circuit: stim.Circuit, family, reload: bool = False, workers: int = 1):
+def search(circuit: stim.Circuit, family, workers: int = 1):
     """Exact GF(2) search over a family of loss patterns; the constraints of the patterns are computed by
     `workers` processes.  Returns (reference fitting every pattern, None) or (None, minimal witness)."""
-    srch = _Search(circuit, reload, workers)
+    srch = _Search(circuit, workers)
     witness = srch.extend(family)
     return (None, witness) if witness is not None else (srch.reference(), None)
 
 
-def verify_witness(circuit: stim.Circuit, witness, reload: bool = False, shots: int = 256) -> None:
+def verify_witness(circuit: stim.Circuit, witness, shots: int = 256) -> None:
     """Independent check of a witness with Stim sampling (not the flow code): each parity is constant, equal
     to its value, in its own lossy circuit (Pauli-stripped, noiseless); the parities cancel; the values sum
     to 1.  Raises AssertionError otherwise."""
     total = np.zeros(circuit.num_measurements, bool)
     for pattern, idx, val in witness:
-        cs = _noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, pattern, reload)))
+        cs = _noiseless(mf.strip_loss(mf.explicit_lossy_circuit(circuit, pattern)))
         parity = np.bitwise_xor.reduce(cs.compile_sampler(seed=1).sample(shots)[:, idx], axis=1) if idx else np.zeros(shots, bool)
         assert (parity == bool(val)).all(), f"witness parity is not fixed to {val} under {pattern}"
         total[idx] ^= True

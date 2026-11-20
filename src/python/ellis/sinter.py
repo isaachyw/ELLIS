@@ -9,7 +9,6 @@
 (loss instructions `I_ERROR[loss](p)` included) and the decoder for the task's detector error model, which Stim builds
 without loss (loss-unaware decoding).  Everything else is sinter's own StimThenDecodeSampler: postselection, discards,
 error classification.  Extra custom counts: `shots_with_loss` (shots with at least one heralded readout).
-Task json_metadata may set "reload": true (resets restore lost qubits).
 """
 import collections
 import pathlib
@@ -35,8 +34,7 @@ class _CompiledMaskedFrameThenDecodeSampler(sinter.CompiledSampler):
     def __init__(self, decoder: sinter.Decoder, task: sinter.Task, tmp_dir: pathlib.Path | None):
         self.task = task
         self.compiled_decoder = _compile_decoder_with_disk_fallback(decoder, task, tmp_dir)
-        reload = bool((task.json_metadata or {}).get("reload", False))
-        self.sampler = mf.compile_sampler(task.circuit, reload=reload)       # seeded from the OS, one per worker
+        self.sampler = mf.compile_sampler(task.circuit)       # seeded from the OS, one per worker
         self.num_obs = task.circuit.num_observables
 
     def sample(self, suggested_shots: int) -> sinter.AnonTaskStats:

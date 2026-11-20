@@ -14,7 +14,6 @@ class MaskFrameSampler:
         self,
         circuit: stim.Circuit | str,
         *,
-        reload: bool = False,
         reference: npt.ArrayLike | None = None,
         forced_losses: dict[int, list[int]] | None = None,
         seed: int | None = None,
@@ -30,8 +29,6 @@ class MaskFrameSampler:
     def batch_size(self, *, detectors: bool = False, heralds: bool = True) -> int: ...
     @property
     def reference(self) -> np.ndarray: ...
-    @property
-    def reload(self) -> bool: ...
     @property
     def num_qubits(self) -> int: ...
     @property
@@ -57,30 +54,3 @@ class StimSampler:
     def simd_width(self) -> int: ...
     @property
     def batch_size(self) -> int: ...
-
-type LossPattern = dict[int, list[int]]
-type QueryInput = tuple[int, list[int], str, int, bool]
-
-class Plan:
-    """Exact noiseless reference of each loss pattern from the full tableau of its surviving circuit."""
-
-    def __init__(self, skeleton: Any, reload: bool, num_qubits: int) -> None: ...
-    def reference(self, losses: LossPattern) -> bytes: ...
-    def batch_reference(self, patterns: list[LossPattern]) -> list[bytes]: ...
-
-class FastPlan:
-    """MSC S-proxy reference: prefix tableau, phase check, CSS gauge sweep and terminal queries, with the full
-    tableau as the exact fallback.  reference() returns (record, fast path taken)."""
-
-    def __init__(
-        self,
-        skeleton: Any,
-        reload: bool,
-        num_qubits: int,
-        cut: int,
-        boundary: int,
-        core_qubits: list[int],
-        queries: list[QueryInput],
-    ) -> None: ...
-    def reference(self, losses: LossPattern) -> tuple[bytes, bool]: ...
-    def batch_reference(self, patterns: list[LossPattern]) -> list[tuple[bytes, bool]]: ...

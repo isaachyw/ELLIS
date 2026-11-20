@@ -2,10 +2,11 @@
 //
 // Losing a qubit clears its alive bit and nothing reads its frame again.  Two-qubit gates (and their
 // DEPOLARIZE2 / PAULI_CHANNEL_2 noise) are dropped where either operand is lost, a lost qubit's readout
-// is a heralded uniformly random placeholder bit, `I_ERROR[reload]` puts a fresh |0> atom into an empty
-// slot, and with `reload` a reset makes the qubit present again.  Everything else is stim::FrameSimulator's own code, unchanged: single-qubit gates and noise,
+// is a heralded uniformly random placeholder bit, and `I_ERROR[reload]` puts a fresh |0> atom into an empty
+// slot.  Everything else is stim::FrameSimulator's own code, unchanged: single-qubit gates and noise,
 // resets, detectors and observables, measurement-flip noise, the record, and the random stream.  With
-// nothing lost, the samples are bit-for-bit stim::FrameSimulator's for the same seed.
+// nothing lost and no reload marker, the samples are bit-for-bit stim::FrameSimulator's for the same seed (a
+// marker draws its fresh gauge bits in every shot, so the random stream does not depend on which shots lost).
 #pragma once
 
 #include <bit>
@@ -115,14 +116,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                     default: measure<2, true>(inst); break;
                 }
                 forget_old_measurements();
-                return;
-            case Kind::RESET:
-                this->do_gate(inst);
-                if (prog.reload) {
-                    for (auto t : inst.targets) {
-                        set_present(t.data);
-                    }
-                }
                 return;
             case Kind::MPAD:
                 this->do_MPAD(inst);
@@ -326,10 +319,8 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
             const Word *__restrict a = alive_table[q].ptr_simd;
             Word *__restrict out = record.storage[record.stored].ptr_simd;
             Word *__restrict h = keep_heralds ? herald_table[num_results].ptr_simd : nullptr;
-            Word lost{};
             for (size_t w = 0; w < n; w++) {
                 out[w] ^= (v[w] & a[w]) | a[w].andnot(r[w]);
-                lost |= ~a[w];
                 if (h != nullptr) {
                     h[w] = ~a[w];
                 }
@@ -342,16 +333,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                     this->x_table[q] ^= this->z_table[q];
                 }
             } else {
-                if (prog.reload) {
-                    if (lost) {  // a restored qubit must not reuse the random bits of its placeholder
-                        auto fresh = scratch.word_range_ref(0, n);
-                        fresh.randomize(fresh.num_bits_padded(), this->rng);
-                        for (size_t w = 0; w < n; w++) {
-                            randomized.ptr_simd[w] ^= a[w].andnot(fresh.ptr_simd[w]);
-                        }
-                    }
-                    set_present(q);
-                }
                 if constexpr (BASIS == 2) {
                     this->x_table[q].clear();
                 } else if constexpr (BASIS == 0) {

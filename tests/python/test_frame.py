@@ -1,5 +1,7 @@
-"""Masked-frame sampler: exact against Stim under gate-drop loss (both reload modes), for every Stim Clifford
-gate, repeated targets, inverted measurements and MPAD; unsupported operations are rejected loudly."""
+"""Masked-frame sampler: exact against Stim under gate-drop loss (with and without reload markers at the resets), for
+every Stim Clifford gate, repeated targets, inverted measurements and MPAD; unsupported operations are rejected
+loudly."""
+import frame_oracle as fo
 import numpy as np
 import pytest
 import stim
@@ -8,13 +10,13 @@ from ellis.check_exact import same_distribution
 from ellis import frame as mf
 
 
-def matches_stim(c, losses, reload, seed):
+def matches_stim(c, losses, seed):
     """The masked frame, with this loss pattern's own exact reference, against Stim on the explicit
     lossy circuit (so only the frame propagation is tested, not the choice of reference)."""
-    ex = mf.explicit_lossy_circuit(c, losses, reload)
+    ex = mf.explicit_lossy_circuit(c, losses)
     ref = mf.strip_loss(ex).reference_sample()
     n = c.num_measurements + 64
-    a, _ = mf.sample(c, n, seed=seed, reload=reload, forced_losses=losses, reference=ref)
+    a, _ = mf.sample(c, n, seed=seed, forced_losses=losses, reference=ref)
     return same_distribution(a, ex.compile_sampler(seed=seed).sample(n))
 
 
@@ -41,6 +43,17 @@ def random_circuit(rng, n=4, depth=14, reload_markers=False):
     return c
 
 
+def random_losses(rng, c, lo, hi):
+    """A few losses right after random instructions of c, each on one of the instruction's qubits."""
+    flat, losses = list(c), {}
+    for _ in range(int(rng.integers(lo, hi))):
+        k = int(rng.integers(len(flat)))
+        qs = [x.value for x in flat[k].targets_copy() if x.is_qubit_target]
+        if qs:
+            losses.setdefault(k, []).append(int(rng.choice(qs)))
+    return losses
+
+
 def test_repeated_targets_act_twice():
     m, _ = mf.sample(stim.Circuit("RX 0\nS 0 0\nMX 0"), 200, seed=1)       # S.S = Z maps |+> to |->
     assert m.all()
@@ -64,13 +77,10 @@ def test_every_clifford_gate_matches_stim_under_loss():
     rng = np.random.default_rng(7)
     for t in range(200):
         c = random_circuit(rng)
-        flat, losses = list(c), {}
-        for _ in range(int(rng.integers(0, 3))):
-            k = int(rng.integers(len(flat)))
-            qs = [x.value for x in flat[k].targets_copy() if x.is_qubit_target]
-            if qs:
-                losses.setdefault(k, []).append(int(rng.choice(qs)))
-        assert matches_stim(c, losses, bool(t % 2), t), (str(c), losses)
+        if t % 2:
+            c, _ = fo.reload_at_resets(c)
+        losses = random_losses(rng, c, 0, 3)
+        assert matches_stim(c, losses, t), (str(c), losses)
 
 
 def test_reload_markers_match_stim_under_loss():
@@ -78,13 +88,10 @@ def test_reload_markers_match_stim_under_loss():
     rng = np.random.default_rng(23)
     for t in range(150):
         c = random_circuit(rng, reload_markers=True)
-        flat, losses = list(c), {}
-        for _ in range(int(rng.integers(1, 4))):
-            k = int(rng.integers(len(flat)))
-            qs = [x.value for x in flat[k].targets_copy() if x.is_qubit_target]
-            if qs:
-                losses.setdefault(k, []).append(int(rng.choice(qs)))
-        assert matches_stim(c, losses, bool(t % 2), t), (str(c), losses)
+        if t % 2:
+            c, _ = fo.reload_at_resets(c)
+        losses = random_losses(rng, c, 1, 4)
+        assert matches_stim(c, losses, t), (str(c), losses)
 
 
 def test_reload_marker_restores_a_lost_atom_in_zero():

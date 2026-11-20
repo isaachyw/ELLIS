@@ -1,7 +1,7 @@
 [project]
 name = "ellis"
 version = "0.1.0"
-description = "ELLIS: Efficient Loss and Leakage Invariant-reference Simulation. Exact masked Pauli-frame sampling of Clifford circuits with atom loss, common-reference certificates, and MSC S-proxy references."
+description = "ELLIS: Efficient Loss and Leakage Invariant-reference Simulation. Exact masked Pauli-frame sampling of Clifford circuits with atom loss, and common-reference certificates."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["numpy>=2.2", "stim>=1.16"]

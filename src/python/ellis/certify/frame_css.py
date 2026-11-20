@@ -1,10 +1,11 @@
 """Frame-CSS: is the circuit CSS in one loss-independent local frame per state segment?
 
 Loss model (`LossModel`).  A loss discards an atom: its later operations are dropped (a two-qubit gate as a
-whole) and its readouts become fair coins.  Losses may follow the model's loss locations (`loss_slots`).
+whole) and its readouts become fair coins.  Losses may follow the model's loss locations (`loss_slots`, or
+with after="marked" the circuit's own `I_ERROR[loss]` markers).
 A reload puts a fresh atom into an empty slot: at every `I_ERROR[reload](p) q` marker (failing with
-probability 1 - p, a loss location right after the marker), plus at resets
-(reload="reset") or between any two operations (reload="anywhere").  The fresh atom is |0>, or maximally
+probability 1 - p, a loss location right after the marker), plus, with reload="anywhere", between any two
+operations.  The fresh atom is |0>, or maximally
 mixed (reload_state="mixed").  The loss-free prefix is everything up to the first loss location.
 
 Segments.  Each qubit's timeline is cut at the prefix end, at resets and at readouts: at each cut its
@@ -25,23 +26,29 @@ pattern of the model, so the plain masked frame with reference kappa is exact.  
 branch that reads kappa at every random readout.  In the frame the state stays positive CSS: surviving
 operations obey the rules, dropped gates do nothing (frames never change across two-qubit gates), a
 discard keeps the stabilizers trivial on the lost atom, and a reload adds one + stabilizer.  So every
-readout can read its kappa bit (paper, sec. "Local-frame compilation into CSS").
+readout can read its kappa bit (paper, sec. "Frame-CSS circuits").
 
-Gauge.  If the frames exist only up to Pauli signs, each wrong sign is fixed by a Pauli applied in the
-masked frame right after its operation, masked by the operation's operands (`sample(gauge=...)`).
-A reload check cannot be fixed this way (the Pauli would have to act only where a reload happened).
+Scope.  The decision below is exact (it accepts exactly the frame-CSS circuits) under the paper's assumptions:
+(i) the operations are single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates and Pauli
+noise, with no classical control; (ii) the prefix leaves at most PREFIX_CHOICES combinations of open frame
+choices.  The rest of the circuit fixes every frame up to Pauli parts
+except a role flip per component and the free second axis of a qubit that later uses one axis; both are tried
+against the prefix state.  There is one combination when the prefix state is generated within role components
+and every qubit it leaves entangled later uses two axes, e.g. for a prefix of resets.  A circuit that breaks (i)
+gets "outside-assumptions" before any stage runs; one that breaks (ii) gets it when no combination tried works.
 
 Decision procedure (near-linear in the circuit, plus one tableau simulation of the prefix):
   * two-qubit gate shapes, computed once per gate type by brute force over the 6 x 6 frame classes:
     controlled (CX, CY, CZ, XC*, YC*: its two axes carry opposite channels), permutation (SWAP, CXSWAP,
     SWAPCX: one frame determines the other), or never CSS (ISWAP, SQRT_XX, CZSWAP, ...);
   * a weighted union-find joins the segments a permutation gate ties; each group may use two axes;
-  * a parity union-find assigns the channel roles; free role flips are tried against the prefix state;
+  * a parity union-find assigns the channel roles; the prefix state is checked in the frames this leaves;
   * one GF(2) system over the frames' Pauli parts (two bits per group) sets the signs.
 """
 import itertools
+import math
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 import numpy as np
 import stim
@@ -54,33 +61,48 @@ REPS = [stim.Tableau.from_named_gate(g) for g in ("I", "H", "S", "SQRT_X_DAG", "
 PAULI_PART = [stim.Tableau.from_named_gate(g) for g in ("I", "X", "Z", "Y")]   # index x + 2 z
 CLASS = {(str(r.x_output(0))[1:], str(r.z_output(0))[1:]): i for i, r in enumerate(REPS)}
 OTHER = {"X": "Z", "Z": "X", "Y": "Z"}
+PREFIX_CHOICES = 1 << 12
 
 
 # ------------------------------------------------------------------ the loss model
 @dataclass(frozen=True)
 class LossModel:
-    after: str = "2q"                 # loss locations: after each two-qubit gate ("2q") or each operation ("any")
+    after: str = "2q"                 # loss locations: after each two-qubit gate ("2q"), each operation ("any"),
+                                      # or at the circuit's I_ERROR[loss] markers ("marked")
     noiseless_loss_free: bool = True  # operations tagged `noiseless` are not loss locations
     from_start: bool = False          # an atom may also be missing before the first operation
-    reload: str = "marked"            # "marked" (I_ERROR[reload] only), "reset" (also resets), "anywhere"
+    reload: str = "marked"            # "marked" (I_ERROR[reload] only) or "anywhere" (between any two operations)
     reload_state: str = "zero"        # a reloaded atom is |0> ("zero") or maximally mixed ("mixed")
 
     def __post_init__(self):
-        assert self.after in ("2q", "any"), self.after
-        assert self.reload in ("marked", "reset", "anywhere"), self.reload
+        assert self.after in ("2q", "any", "marked"), self.after
+        assert self.reload in ("marked", "anywhere"), self.reload
         assert self.reload_state in ("zero", "mixed"), self.reload_state
 
-    @property
-    def reload_at_reset(self) -> bool:
-        """The `reload` flag of frame.sample / explicit_lossy_circuit / constraints."""
-        return self.reload == "reset"
+# The most pessimistic model: loss before the first operation and after every operation (noiseless tags
+# included), |0> reload between any two operations.  A reference proven here is common to every loss model.
+PESSIMISTIC = LossModel(after="any", noiseless_loss_free=False, from_start=True, reload="anywhere")
+MARKED = LossModel(after="marked", reload="marked")
+
+
+def circuit_model(circuit: stim.Circuit) -> LossModel:
+    """The loss model a circuit with its noise already injected describes: losses and reloads exactly at its
+    `I_ERROR[loss]` / `I_ERROR[reload]` markers.  A circuit with neither marker says nothing about loss, so it
+    gets PESSIMISTIC, whose proof holds under every loss model."""
+    flat = circuit.flattened()
+    return MARKED if any(mf.is_loss(inst) or mf.is_reload(inst) for inst in flat) else PESSIMISTIC
 
 
 def loss_locations(circuit: stim.Circuit, model: LossModel):
     """(k, q): q may be lost right after instruction k (k = -1: before the first instruction).  A reload marker
     `I_ERROR[reload](p)` with p < 1 adds (k, q) for each target q that may be empty there: its failure."""
     start = [(-1, q) for q in range(circuit.num_qubits)] if model.from_start else []
-    locations = start + loss_slots(circuit, model.after, not model.noiseless_loss_free)
+    if model.after == "marked":
+        sites = [(k, q) for k, inst in enumerate(circuit.flattened()) if mf.is_loss(inst)
+                 for q in dict.fromkeys(t.value for t in inst.targets_copy())]
+    else:
+        sites = loss_slots(circuit, model.after, not model.noiseless_loss_free)
+    locations = start + sites
     first = {}
     for k, q in locations:
         first[q] = min(first.get(q, k), k)
@@ -136,19 +158,25 @@ def _shape(name):
 
 
 SHAPES = {name: _shape(name) for name in sorted(mf.UNITARY_2Q)}
+OPERATIONS = mf.UNITARY_1Q | mf.UNITARY_2Q | set(mf.RESET) | set(mf.MEAS)
 
 
 # ------------------------------------------------------------------ result and checks
+Verdict = Literal["frame-css", "not-frame-css", "outside-assumptions"]
+
+
 @dataclass
 class FrameCSS:
-    proven: bool                                 # kappa (with the gauge, if any) is exact for the model
-    exact: bool = False                          # no gauge needed
-    reference: np.ndarray | None = None          # kappa, for frame.sample(reference=...)
-    gauge: dict = field(default_factory=dict)    # {index: [(qubit, pauli, mask_qubits)]} for frame.sample(gauge=...)
+    verdict: Verdict
+    reference: np.ndarray | None = None          # kappa, for frame.sample(reference=...), when frame-CSS
     prefix_end: int = -1                         # last instruction of the loss-free prefix
     segments: int = 0
     groups: int = 0
-    reasons: list = field(default_factory=list)  # why not proven, or why a gauge is needed
+    reasons: list = field(default_factory=list)  # why not frame-CSS, or which assumption fails
+
+    @property
+    def proven(self) -> bool:
+        return self.verdict == "frame-css"
 
 
 class Prep(NamedTuple):      # a + eigenstate of the physical axis, at frame time A of segment seg
@@ -156,9 +184,9 @@ class Prep(NamedTuple):      # a + eigenstate of the physical axis, at frame tim
     A: stim.Tableau
     axis: str
     sign: int
-    k: int                   # the gauge goes before instruction k + 1
+    k: int
     q: int
-    reload: bool             # a reload: must hold exactly (no gauge)
+    reload: bool
 
 
 class Link(NamedTuple):      # a readout's post-state: the old frame's sign must equal the new frame's sign
@@ -178,22 +206,51 @@ class Gate(NamedTuple):      # a two-qubit gate in the frames of its operands
     Ab: stim.Tableau
     k: int
     qs: tuple
-    alone: bool              # no later pair of the same instruction touches these qubits (a gauge fits after it)
 
 
 class _Fail(Exception):
     pass
 
 
-def frame_css(circuit: stim.Circuit, model: LossModel = LossModel()) -> FrameCSS:
-    """Decide frame-CSS for the loss model; build kappa and, where needed, the gauge."""
-    res = FrameCSS(False)
+class _Outside(Exception):
+    """The circuit breaks an assumption under which the stages decide frame-CSS exactly."""
+
+
+def frame_css(circuit: stim.Circuit, model: LossModel | None = None) -> FrameCSS:
+    """Decide frame-CSS for the loss model (default: circuit_model(circuit)) and build kappa."""
+    model = circuit_model(circuit) if model is None else model
+    res = FrameCSS("not-frame-css")
+    flat = circuit.flattened()
     try:
-        _certify(circuit.flattened(), model, res)
+        _check_operations(flat)
+        _certify(flat, model, res)
+    except _Outside as e:
+        res.verdict = "outside-assumptions"
+        res.reasons.append(str(e))
     except _Fail as e:
-        res.proven = False
         res.reasons.append(str(e))
     return res
+
+
+def _frame_free(inst) -> bool:
+    """Annotations, noise, Pauli and identity gates: no frame changes and no loss-relevant timing."""
+    gd = stim.gate_data(inst.name)
+    return (inst.name in mf.ANNOTATIONS or inst.name in mf.PAULI or inst.name in ("I", "II")
+            or (gd.is_noisy_gate and not gd.produces_measurements))
+
+
+def _check_operations(flat):
+    """Assumption (i): single-qubit Pauli-basis resets and readouts, one- and two-qubit Clifford gates, Pauli
+    noise and annotations, with no classically controlled operation."""
+    for k, inst in enumerate(flat):
+        gd = stim.gate_data(inst.name)
+        if inst.name in mf.ANNOTATIONS or (gd.is_noisy_gate and not gd.produces_measurements):
+            continue
+        if inst.name not in OPERATIONS:
+            raise _Outside(f"assumption (i): instruction {k} `{inst}` is not a single-qubit reset or readout, "
+                           f"a one- or two-qubit Clifford gate, or Pauli noise")
+        if any(t.is_measurement_record_target or t.is_sweep_bit_target for t in inst.targets_copy()):
+            raise _Outside(f"assumption (i): instruction {k} `{inst}` is classically controlled")
 
 
 def _certify(flat, model, res):
@@ -201,6 +258,16 @@ def _certify(flat, model, res):
     locations = loss_locations(flat, model)
     k0 = min((k for k, _ in locations), default=len(ops) - 1)
     res.prefix_end = k0
+    # Losses happen between instructions, which is the same as after each gate unless a qubit repeats inside one
+    # instruction.  A certificate depends on loss timing only through the prefix end and the reload points, and
+    # reloads are checked after every gate below, so only the instruction that ends the prefix must not repeat a
+    # qubit.
+    end = ops[k0] if locations and k0 >= 0 else None          # with no loss location the prefix is everything
+    if end is not None and not _frame_free(end):
+        qs = [t.value for t in end.targets_copy()]
+        if len(set(qs)) < len(qs):
+            raise _Outside(f"loss placement: the first loss can follow instruction {k0} `{end}`, which acts on a qubit "
+                           f"twice, so the loss-free prefix would end inside it; separate its gates with a TICK")
     ref = _stripped(ops[: k0 + 1]).reference_sample()       # the loss-free prefix's readouts
 
     # ---------------------------------------------------------------- 1. timeline: segments and what they must satisfy
@@ -216,6 +283,17 @@ def _certify(flat, model, res):
     for kk, q in locations:
         after.setdefault(kk, []).append(q)
     reload_seen = set()
+    # A marker whose qubit is next reset (or never touched again) loads an atom nothing reads before the reset
+    # discards it, so its reload needs no + eigenstate: the explicit spelling of a reload at that reset.
+    unread_reloads, next_use = set(), {}
+    for k in range(len(ops) - 1, k0, -1):
+        inst = ops[k]
+        qs = [t.value for t in inst.targets_copy() if t.is_qubit_target]
+        if mf.is_reload(inst):
+            unread_reloads.update((k, q) for q in qs if next_use.get(q, "reset") == "reset")
+        elif not _frame_free(inst):
+            for q in qs:
+                next_use[q] = "reset" if inst.name in mf.RESET else "use"
 
     def new_seg(q, k, kind):
         cur[q], A[q] = len(segs), I1
@@ -246,30 +324,35 @@ def _certify(flat, model, res):
     for k in range(k0 + 1, len(ops)):
         inst = ops[k]
         name, gd, targets = inst.name, stim.gate_data(inst.name), inst.targets_copy()
+        qs = [t.value for t in targets]
+        lossy = set(after.get(k, ()))                       # a loss may follow each of this instruction's gates
         if name == "MPAD":
             for t in targets:
                 kappa[m] = bool(t.value)
                 m += 1
-            continue
-        if mf.is_reload(inst):
-            for t in targets:
-                reload_point(t.value, k, marked=True)
-            continue
-        if name in mf.ANNOTATIONS or name in mf.PAULI or name in ("I", "II") or (gd.is_noisy_gate and not gd.produces_measurements):
-            continue
-        if any(not t.is_qubit_target for t in targets):
-            raise _Fail(f"instruction {k} `{inst}`: only plain qubit targets are supported")
-        qs = [t.value for t in targets]
-        if name in mf.UNITARY_1Q:
+        elif mf.is_reload(inst):
+            certain = not inst.gate_args_copy() or inst.gate_args_copy()[0] >= 1
+            for q in qs:
+                if (k, q) not in unread_reloads:
+                    reload_point(q, k, marked=True)
+                if certain:                                 # the slot is full until the qubit's next loss location
+                    may_be_lost.discard(q)
+        elif _frame_free(inst):
+            pass
+        elif name in mf.UNITARY_1Q:
             g = stim.Tableau.from_named_gate(name)
             for q in qs:
                 A[q] = g * A[q]
+                if q in lossy:
+                    may_be_lost.add(q)
                 reload_point(q, k)
         elif name in mf.RESET:
             for q in qs:
                 s = new_seg(q, k, "reset")
                 uses.append((s, I1, mf.RESET[name], f"reset at instruction {k}"))
                 checks.append(Prep(s, I1, mf.RESET[name], 1, k, q, False))
+                if q in lossy:
+                    may_be_lost.add(q)
                 reload_point(q, k)
         elif name in mf.MEAS:
             ax = mf.MEAS[name]
@@ -286,11 +369,12 @@ def _certify(flat, model, res):
                     checks.append(Prep(s, I1, ax, 1, k, q, False))
                 else:                               # the readout leaves its eigenstate; sign = the record
                     checks.append(Link(old, A_old, s, ax, k, q))
+                if q in lossy:
+                    may_be_lost.add(q)
                 reload_point(q, k)
         elif name in mf.UNITARY_2Q:
             shape = SHAPES[name]
-            pairs = list(zip(qs[::2], qs[1::2]))
-            for i, (a, b) in enumerate(pairs):
+            for a, b in zip(qs[::2], qs[1::2]):
                 sa, sb, Aa, Ab = cur[a], cur[b], A[a], A[b]
                 used.update((sa, sb))
                 where = f"{name} at instruction {k} on {(a, b)}"
@@ -306,10 +390,7 @@ def _certify(flat, model, res):
                     _, M0, need = shape
                     perms.append((sa, sb, Ab.inverse() * M0 * Aa, where))
                     uses += [(sa, Aa, ax, where) for ax in need]
-                alone = not any({a, b} & set(p) for p in pairs[i + 1:])
-                checks.append(Gate(name, sa, Aa, sb, Ab, k, (a, b), alone))
-        else:
-            raise _Fail(f"instruction {k} `{inst}`: `{name}` is not supported")
+                checks.append(Gate(name, sa, Aa, sb, Ab, k, (a, b)))
         for q in after.get(k, ()):
             may_be_lost.add(q)
             reload_point(q, k)
@@ -320,20 +401,27 @@ def _certify(flat, model, res):
     keep, sub = _prefix_state(ops, k0, n, ref, cut, used, uses, checks)
 
     # ---------------------------------------------------------------- 3. permutation gates: weighted union-find
-    parent, T = list(range(len(segs))), [I1] * len(segs)
+    parent, T, size = list(range(len(segs))), [I1] * len(segs), [1] * len(segs)
 
     def find(x):
-        """(root, T) with frame(x) = T frame(root)."""
-        if parent[x] == x:
-            return x, I1
-        r, Tp = find(parent[x])
-        parent[x], T[x] = r, T[x] * Tp
-        return r, T[x]
+        """(root, T) with frame(x) = T frame(root); compresses the path."""
+        path = []
+        while parent[x] != x:
+            path.append(x)
+            x = parent[x]
+        to_root = I1
+        for y in reversed(path):
+            to_root = T[y] * to_root
+            parent[y], T[y] = x, to_root
+        return x, (T[path[0]] if path else I1)
 
     for sa, sb, M, why in perms:
         (ra, Ta), (rb, Tb) = find(sa), find(sb)
         if ra != rb:
-            parent[rb], T[rb] = ra, Tb.inverse() * M * Ta
+            link = Tb.inverse() * M * Ta                         # frame(rb) = link frame(ra)
+            if size[ra] < size[rb]:
+                ra, rb, link = rb, ra, link.inverse()
+            parent[rb], T[rb], size[ra] = ra, link, size[ra] + size[rb]
         elif not _is_pauli((M * Ta).inverse() * Tb):
             raise _Fail(f"{why}: closes a loop that needs a non-Pauli frame change")
 
@@ -352,17 +440,19 @@ def _certify(flat, model, res):
             q, k, kind = segs[r]
             raise _Fail(f"qubit {q} (segment from {kind} at {k}) needs all three axes: {why_axis[r][:4]}")
     first = {r: min(d) for r, d in axes.items()}
-    pp, par = {}, {}
+    pp, par, psize = {}, {}, {}
 
     def pfind(x):
         """(component, beta): beta = 1 iff the group's first axis carries the Z channel, relative to the component."""
-        if pp.setdefault(x, x) == x:
-            par.setdefault(x, 0)
-            return x, 0
-        r, s = pfind(pp[x])
-        pp[x] = r
-        par[x] ^= s
-        return r, par[x]
+        path = []
+        while pp.setdefault(x, x) != x:
+            path.append(x)
+            x = pp[x]
+        to_root = 0
+        for y in reversed(path):
+            to_root ^= par[y]
+            pp[y], par[y] = x, to_root
+        return x, (par[path[0]] if path else 0)
 
     for (sa, Aa, P), (sb, Ab, Q), why in ctrls:
         (ra, la), (rb, lb) = root_axis(sa, Aa, P), root_axis(sb, Ab, Q)
@@ -372,81 +462,107 @@ def _certify(flat, model, res):
             if sx ^ sy != c:
                 raise _Fail(f"{why}: conflicting channel roles")
         else:
-            pp[y], par[y] = x, sx ^ sy ^ c
+            if psize.get(x, 1) < psize.get(y, 1):
+                x, y = y, x
+            pp[y], par[y], psize[x] = x, sx ^ sy ^ c, psize.get(x, 1) + psize.get(y, 1)
     res.groups = len({find(s)[0] for s in range(len(segs))})
 
-    def frame_class(r, flip):
+    def frame_class(r, flips, alt):
+        """Frame class of root r: its axes' channels follow its role (flipped per component by `flips`); a root
+        with fewer than two axes takes its free second axis, or its whole class, from `alt`."""
         d = axes.get(r)
         if not d:
-            return 0
+            return alt.get(r, 0)
         comp, beta = pfind(r)
-        beta ^= flip.get(comp, 0)
         f = first[r]
-        want = {f: "Z" if beta else "X"}
+        want = {f: "Z" if beta ^ flips.get(comp, 0) else "X"}
         other = [a for a in d if a != f]
-        want[other[0] if other else OTHER[f]] = "X" if want[f] == "Z" else "Z"
+        want[other[0] if other else alt.get(r, OTHER[f])] = "X" if want[f] == "Z" else "Z"
         (c,) = [c for c in range(6) if all(channel(c, a) == ch for a, ch in want.items())]
         return c
 
-    # ---------------------------------------------------------------- 5. entangled prefix state: CSS in the frame?
-    flip, prefix_rows = {}, []
-    if sub:
-        comps = sorted({pfind(find(cut[q])[0])[0] for q in keep})
-        for bits in range(1 << min(12, max(0, len(comps) - 1))):
-            trial = {c: (bits >> i) & 1 for i, c in enumerate(comps[1:])}
-            pure = _pure_generators(sub, keep, n, lambda q: find(cut[q])[1] * REPS[frame_class(find(cut[q])[0], trial)])
-            if pure is not None:
-                flip = trial
-                prefix_rows = [(_sign_mask(p, lambda q: find(cut[q])[0]), int(p.sign.real < 0)) for p in pure]
-                break
-        else:
-            raise _Fail(f"prefix output state is not CSS in the frames the rest of the circuit forces "
-                        f"({len(comps)} role components tried)")
+    # ---------------------------------------------------------------- 5-6. prefix state and signs
+    # The lossy part fixes every frame up to Pauli parts, except two choices that only the prefix state can tell
+    # apart: a role flip per component, and the free second axis of a root that uses fewer than two axes.  When the
+    # prefix state is generated within components and every qubit it leaves entangled uses two axes, neither matters
+    # (flipping a component conjugates its stabilizers by H; no free axes), so one candidate decides.  Otherwise every candidate is tried, up to PREFIX_CHOICES.
+    kept = {find(cut[q])[0] for q in keep}
+    flip_comps = []
+    if sub and not _generated_within(sub, {q: pfind(find(cut[q])[0])[0] for q in keep}, n):
+        flip_comps = sorted({pfind(r)[0] for r in kept if axes.get(r)})[1:]
+    dims = [[("flip", c, 0), ("flip", c, 1)] for c in flip_comps]
+    for r in sorted(kept):
+        d = axes.get(r, ())
+        if len(d) == 1:
+            (f,) = d
+            dims.append([("alt", r, a) for a in (OTHER[f], *({"X", "Y", "Z"} - {f, OTHER[f]}))])
+        elif not d:
+            dims.append([("alt", r, c) for c in range(6)])
+    candidates = math.prod(len(d) for d in dims)
+    cache = {}
 
-    # ---------------------------------------------------------------- 6. signs: choose the Pauli parts
-    cls_of = {}
+    def solve(flips, alt):
+        """(frame0, solution) for one candidate, or None with the reason the prefix state rules it out."""
+        cls_of = {}
 
-    def frame0(s, A_):
-        """(root, frame at time A_ of segment s, without the root's Pauli part)."""
-        r, Tl = find(s)
-        if r not in cls_of:
-            cls_of[r] = frame_class(r, flip)
-        return r, A_ * Tl * REPS[cls_of[r]]
+        def frame0(s, A_):
+            """(root, frame at time A_ of segment s, without the root's Pauli part)."""
+            r, Tl = find(s)
+            if r not in cls_of:
+                cls_of[r] = frame_class(r, flips, alt)
+            return r, A_ * Tl * REPS[cls_of[r]]
 
-    # Reload checks first: they must hold.  Then every other check, greedily; a check with an equation the
-    # system refuses gets a gauge Pauli below.  An accepted equation holds in the final solution.
-    system, cache, wrong = _GF2(), {}, []
-    hard = [c for c in checks if isinstance(c, Prep) and c.reload]
-    for chk in hard + [c for c in checks if not (isinstance(c, Prep) and c.reload)]:
-        roots, eqs = _sign_equations(chk, frame0, cache)
-        if not all([system.add(*row) for row in _place(eqs, roots)]):
-            if isinstance(chk, Prep) and chk.reload:
-                raise _Fail(f"reload of qubit {chk.q} at instruction {chk.k} needs a sign no frame gives")
-            wrong.append(chk)
-    prefix_wrong = not all([system.add(*row) for row in prefix_rows])
-    sol = system.solution()
+        prefix_rows = []
+        if sub:
+            pure = _pure_generators(sub, keep, n, lambda q: frame0(cut[q], I1)[1])
+            if pure is None:
+                return None, "it is not CSS in the frames the rest of the circuit forces"
+            prefix_rows = [(_sign_mask(p, lambda q: find(cut[q])[0]), int(p.sign.real < 0)) for p in pure]
+        # Every sign requirement is one affine system over the groups' Pauli parts.  The lossy part's own
+        # requirements are solvable for every candidate or for none, so their failure is final.
+        system = _GF2()
+        for chk in checks:
+            roots, eqs = _sign_equations(chk, frame0, cache)
+            if not all(system.add(*row) for row in _place(eqs, roots)):
+                raise _Fail(f"{_describe(chk)}: no choice of Pauli parts gives it a + sign together with the checks before it")
+        if not all(system.add(*row) for row in prefix_rows):
+            return None, "no choice of Pauli parts makes all its CSS generators +"
+        return (frame0, system.solution()), None
+
+    found, why = None, None
+    for choice in itertools.islice(itertools.product(*dims), PREFIX_CHOICES):
+        found, reason = solve({c: v for kind, c, v in choice if kind == "flip"},
+                              {r: v for kind, r, v in choice if kind == "alt"})
+        if found:
+            break
+        why = why or reason
+    if not found:
+        if candidates > PREFIX_CHOICES:
+            raise _Outside(f"assumption (ii): the prefix state leaves {candidates} role and axis choices open, more "
+                           f"than the {PREFIX_CHOICES} tried, and none of those works ({why})")
+        raise _Fail(f"prefix output state: {why} (all {candidates} role and axis choices tried)")
+    frame0, sol = found
 
     def frame(s, A_):
         r, F = frame0(s, A_)
         return F * PAULI_PART[((sol >> (2 * r)) & 1) | (((sol >> (2 * r + 1)) & 1) << 1)]
 
-    # ---------------------------------------------------------------- 7. kappa, and a gauge for every wrong sign
+    # ---------------------------------------------------------------- 7. kappa
     for mi, s, A_, axis, inverted in meas:
         letter, sign = image(frame(s, A_), axis)
         assert letter in "XZ", (mi, letter)
         kappa[mi] = (sign < 0) ^ inverted
     res.reference = kappa
-    for chk in wrong:
-        fixes = _residual(chk, frame)
-        assert fixes, chk
-        for k, q, pauli, mask in fixes:
-            res.gauge.setdefault(k, []).append((q, pauli, mask))
-    if prefix_wrong:
-        for q, pauli in _prefix_residual(sub, keep, n, lambda q: frame(cut[q], I1)):
-            res.gauge.setdefault(k0 + 1, []).append((q, pauli, (q,)))
-    res.proven, res.exact = True, not res.gauge
-    if res.gauge:
-        res.reasons.append(f"frames exist up to Pauli signs: {sum(map(len, res.gauge.values()))} gauge Paulis")
+    res.verdict = "frame-css"
+
+
+def _describe(chk):
+    if isinstance(chk, Prep):
+        what = "reload" if chk.reload else "prepared state"
+        return f"{what} of qubit {chk.q} at instruction {chk.k}"
+    if isinstance(chk, Link):
+        return f"readout of qubit {chk.q} at instruction {chk.k} (sign carried into the next segment)"
+    return f"{chk.name} at instruction {chk.k} on {chk.qs}"
 
 
 # ------------------------------------------------------------------ signs
@@ -482,75 +598,9 @@ def _sign_equations(chk, frame0, cache):
     return ([ra] if same else [ra, rb]), cache[key]
 
 
-def _residual(chk, frame):
-    """Gauge Paulis [(index, qubit, pauli, mask)] that fix this check's sign with the chosen frames."""
-    if isinstance(chk, Prep):
-        F = frame(chk.seg, chk.A)
-        letter, sign = image(F, chk.axis, chk.sign)
-        if sign > 0:
-            return []
-        assert not chk.reload, chk
-        fix = F(stim.PauliString(OTHER[letter]))
-        return [(chk.k + 1, chk.q, "_XYZ"[fix[0]], (chk.q,))]
-    if isinstance(chk, Link):
-        Fo, Fn = frame(chk.old, chk.A), frame(chk.new, I1)
-        if image(Fo, chk.axis)[1] == image(Fn, chk.axis)[1]:
-            return []
-        fix = Fn(stim.PauliString(OTHER[image(Fn, chk.axis)[0]]))
-        return [(chk.k + 1, chk.q, "_XYZ"[fix[0]], (chk.q,))]
-    W = frame(chk.sa, chk.Aa) + frame(chk.sb, chk.Ab)
-    G = W.inverse() * stim.Tableau.from_named_gate(chk.name) * W           # the gate in the frame
-    if positive_css(G):
-        return []
-    if not chk.alone:
-        raise _Fail(f"{chk.name} at instruction {chk.k} on {chk.qs} needs a gauge Pauli, but a later pair of the same "
-                    f"instruction acts on its qubits; split the instruction")
-    unsigned = stim.Tableau.from_conjugated_generators(
-        xs=[_positive(G.x_output(i)) for i in range(2)], zs=[_positive(G.z_output(i)) for i in range(2)])
-    phys = W(_pauli_of(G * unsigned.inverse()))                            # G = P unsigned: P acts right after
-    return [(chk.k + 1, q, "_XYZ"[phys[i]], chk.qs) for i, q in enumerate(chk.qs) if phys[i]]
-
-
-def _prefix_residual(gens, keep, n, frame_of):
-    """Physical Paulis on the kept qubits that make every pure generator of the in-frame prefix state +."""
-    F = stim.Tableau(n)
-    for q in keep:
-        F.append(frame_of(q), [q])
-    pure = _pure_generators(gens, keep, n, frame_of)
-    bad = [p for p in pure if p.sign.real < 0]
-    if not bad:
-        return []
-    # Q = X^qx Z^qz (frame coordinates, bits qx_q at q and qz_q at n + q) anticommutes with exactly the
-    # negative generators: qx.z + qz.x = [g negative] for each generator g = X^x Z^z.
-    system = _GF2()
-    for p in pure:
-        x, z = p.to_numpy()
-        y = sum(1 << int(q) for q in np.flatnonzero(z)) | sum(1 << (n + int(q)) for q in np.flatnonzero(x))
-        assert system.add(y, int(p.sign.real < 0))
-    sol = system.solution()
-    Q = stim.PauliString(n)
-    for q in range(n):
-        Q[q] = "_XZY"[((sol >> q) & 1) | (((sol >> (n + q)) & 1) << 1)]
-    phys = F(Q)
-    return [(q, "_XYZ"[phys[q]]) for q in keep if phys[q]]
-
-
-def _positive(p):
-    return p * int(p.sign.real)
-
-
 def _is_pauli(t):
     return all(str(t.x_output(k))[1:] == "_" * k + "X" + "_" * (len(t) - k - 1) and
                str(t.z_output(k))[1:] == "_" * k + "Z" + "_" * (len(t) - k - 1) for k in range(len(t)))
-
-
-def _pauli_of(t):
-    """The Pauli P whose conjugation is the Pauli tableau t."""
-    out = stim.PauliString(len(t))
-    for k in range(len(t)):
-        sx, sz = str(t.x_output(k))[0] == "-", str(t.z_output(k))[0] == "-"
-        out[k] = {(False, False): 0, (True, False): 3, (False, True): 1, (True, True): 2}[(sx, sz)]
-    return out
 
 
 def _equations(pred, nroots):
@@ -622,6 +672,23 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
     qubits, generators of the kept part of the state: the elements acting as identity on every other qubit)."""
     sim = stim.TableauSimulator()
     sim.set_num_qubits(n)
+    spare = n
+
+    def reset(q, axis):
+        """Discard q's state into a fresh qubit that nothing touches again (a partial trace: Stim's own reset
+        would collapse q's partners onto a random branch), then prepare the + eigenstate of axis."""
+        nonlocal spare
+        if sim.peek_x(q) or sim.peek_y(q) or sim.peek_z(q):       # q is unentangled: Stim's reset touches nothing else
+            sim.do(stim.Circuit(f"R{'' if axis == 'Z' else axis} {q}"))
+            return
+        sim.set_num_qubits(spare + 1)
+        sim.swap(q, spare)
+        spare += 1
+        if axis != "Z":
+            sim.h(q)
+        if axis == "Y":
+            sim.s(q)
+
     m = 0
     for inst in ops[: k0 + 1]:
         name, gd = inst.name, stim.gate_data(inst.name)
@@ -634,14 +701,17 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
                 getattr(sim, "postselect_" + mf.MEAS[name].lower())(
                     t.value, desired_value=bool(ref[m]) ^ t.is_inverted_result_target)
                 if name.startswith("MR"):
-                    sim.do(stim.Circuit(f"R{'' if mf.MEAS[name] == 'Z' else mf.MEAS[name]} {t.value}"))
+                    reset(t.value, mf.MEAS[name])
                 m += 1
+        elif name in mf.RESET:
+            for t in inst.targets_copy():
+                reset(t.value, mf.RESET[name])
         else:
             sim.do(stim.Circuit(f"{name} " + " ".join(str(t.value) for t in inst.targets_copy())))
     keep = []
     for q in range(n):
         for P in "XYZ":
-            e = sim.peek_observable_expectation(stim.PauliString("_" * q + P))
+            e = getattr(sim, "peek_" + P.lower())(q)
             if e:
                 if cut[q] in used:
                     uses.append((cut[q], I1, P, f"prefix output state of qubit {q}"))
@@ -653,14 +723,14 @@ def _prefix_state(ops, k0, n, ref, cut, used, uses, checks):
     if not keep:
         return [], []
     stabs = sim.canonical_stabilizers()
-    drop = [q for q in range(n) if q not in set(keep)]
+    drop = [q for q in range(spare) if q not in set(keep)]
     rows = np.array([np.concatenate([g.to_numpy()[0][drop], g.to_numpy()[1][drop]]) for g in stabs], np.uint8)
     out = []
     for c in (_nullspace(rows) if drop else list(np.eye(len(stabs), dtype=np.uint8))):
-        p = stim.PauliString(n)
+        p = stim.PauliString(spare)
         for i in np.flatnonzero(c):
             p *= stabs[i]
-        out.append(p)
+        out.append(p[:n] * p.sign)                      # slicing a PauliString drops its sign
     return keep, out
 
 
@@ -685,6 +755,28 @@ def _nullspace(M):
 def _rank(M):
     M = np.asarray(M, np.uint8)
     return M.shape[0] - len(_nullspace(M)) if len(M) else 0
+
+
+def _generated_within(gens, part_of, n):
+    """Is <gens> generated by elements that each act within one part?  Equivalently, does each generator's
+    restriction to each part lie in the group (up to sign)?"""
+    def vec(p):
+        x, z = p.to_numpy()
+        return sum(1 << int(q) for q in np.flatnonzero(x)) | sum(1 << (n + int(q)) for q in np.flatnonzero(z))
+
+    def reduce(v):
+        while v and (h := v.bit_length() - 1) in piv:
+            v ^= piv[h]
+        return v
+
+    vecs, piv = [vec(g) for g in gens], {}
+    for v in vecs:
+        if v := reduce(v):
+            piv[v.bit_length() - 1] = v
+    masks = {}
+    for q, part in part_of.items():
+        masks[part] = masks.get(part, 0) | (1 << q) | (1 << (n + q))
+    return not any(reduce(v & m) for v in vecs for m in masks.values() if v & m)
 
 
 def _pure_generators(gens, keep, n, frame_of):

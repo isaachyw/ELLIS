@@ -12,12 +12,11 @@ namespace maskframe {
 
 enum class Kind : uint8_t {
     SKIP,             // annotations, identities, I_ERROR without the `loss` or `reload` tag
-    STIM,             // stim::FrameSimulator::do_gate unchanged: single-qubit Cliffords and noise, detectors,
-                      // observables.  A lost qubit's frame is never read again, so these need no mask.
+    STIM,             // stim::FrameSimulator::do_gate unchanged: single-qubit Cliffords and noise, resets,
+                      // detectors, observables.  A lost qubit's frame is never read again, so these need no mask.
     PAULI,            // X / Y / Z gates flip the frame (the reference is computed without them)
     TWO_QUBIT,        // two-qubit Clifford, dropped where either operand is lost
     MEASURE,          // M, MX, MY, MR, MRX, MRY: a lost qubit reads as a heralded uniformly random bit
-    RESET,            // R, RX, RY: Stim's reset, and with `reload` the qubit is present again
     MPAD,
     DEPOLARIZE2,      // dropped where either operand is lost, like the gate it follows
     PAULI_CHANNEL_2,  // likewise
@@ -32,7 +31,6 @@ struct Program {
     stim::CircuitStats stats;
     std::vector<Kind> kinds;         // one per instruction of `circuit`
     ForcedLosses forced_losses;      // qubits lost in every shot right after instruction k (k = -1: from the start)
-    bool reload = false;             // resets restore lost qubits
     std::vector<uint8_t> reference;  // the reference record (0/1 per measurement)
     std::vector<uint8_t> detector_flip;    // XORed into detectors / observables, so that detection events keep
     std::vector<uint8_t> observable_flip;  // Stim's convention (relative to Stim's own reference sample)
@@ -40,6 +38,6 @@ struct Program {
 
 /// Flattens and validates `circuit`.  `reference` (num_measurements bytes, or null) overrides the default
 /// reference: Stim's reference sample of the circuit without loss instructions and without Pauli gates.
-Program compile(const stim::Circuit &circuit, bool reload, const uint8_t *reference, const ForcedLosses &forced_losses);
+Program compile(const stim::Circuit &circuit, const uint8_t *reference, const ForcedLosses &forced_losses);
 
 }  // namespace maskframe

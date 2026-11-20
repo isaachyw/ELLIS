@@ -12,7 +12,8 @@ Loss instruction: `I_ERROR[loss](p) q...` (ppvm spelling; Stim parses and ignore
 Reload instruction: `I_ERROR[reload](p) q...` loads a fresh atom in |0> into each empty slot q with
 probability p (default 1) and leaves a present atom alone; a failed reload leaves the slot empty, which is
 the same as a successful reload followed by a loss right after the marker (how explicit loss patterns write
-it).  It can stand anywhere; `reload=True` adds an implicit, always successful reload at every reset.
+it).  It can stand anywhere; to reload at a reset, write the marker just before the reset (before R / RX /
+RY, or between the readout and reset of a split MR / MRX / MRY), so the fresh atom is reset like any other.
 `sample` below is the numpy reference implementation with all research options (gauges, reference
 tables, ...).  `compile_sampler` returns the C++ engine (ellis._core, built on Stim's SIMD bit
 tables): the same semantics in plain mode, batched and multithreaded, at close to Stim's speed.
@@ -146,17 +147,17 @@ def canonical_reference(circuit: stim.Circuit):
     return ref, inserts
 
 
-def compile_sampler(circuit: stim.Circuit, *, reload: bool = False, reference=None, forced_losses=None,
+def compile_sampler(circuit: stim.Circuit, *, reference=None, forced_losses=None,
                     seed: int | None = None, batch_size: int = 0, simd_width: int = 0):
     """C++ masked-frame sampler for `circuit` (plain mode: one reference record, optional forced losses).
     .sample(shots) -> (measurements, heralds) like `sample`; .sample_detectors(shots) -> (detectors, observables).
     Both take bit_packed=, heralds= and threads=; see ellis._core.MaskFrameSampler."""
     from ellis._core import MaskFrameSampler
-    return MaskFrameSampler(circuit, reload=reload, reference=reference, forced_losses=forced_losses, seed=seed,
+    return MaskFrameSampler(circuit, reference=reference, forced_losses=forced_losses, seed=seed,
                             batch_size=batch_size, simd_width=simd_width)
 
 
-def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = False, reference=None,
+def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reference=None,
            canonical: bool = False, gauge=None, per_shot_inserts=None, deterministic: bool = False,
            forced_losses=None, ref_table=None, reference_blocks=None, reference_provider=None,
            return_losses: bool = False, software_feedforward: bool = False, lost_partner_idle_p: float = 0.0):
@@ -175,21 +176,20 @@ def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = Fals
     per_shot_inserts / deterministic: used by the solver to measure each insert's flip pattern:
            shot j gets only per_shot_inserts[j] = (index, qubit, pauli); no randomness at all.
     ref_table: (key_atoms, {frozenset(lost key atoms): reference}) from ref_table.py, for circuits with
-           no single valid reference (no reload, plain mode only).  Each shot takes the reference of its
+           no single valid reference (plain mode only).  Each shot takes the reference of its
            class; a shot whose class is not in the table takes the exact reference of its own lossy
            circuit (one Stim reference sample per such shot, the frame is kept).
            Then returns (measurements, heralds, fell_back).
-    reference_blocks: experimental block_reference.compile_blocks() result for this exact circuit
-           and reload setting. XORs the active blocks' reference deltas; not certified exact.
-    reference_provider: an exact get_many(patterns) provider for this circuit and reload setting.
+    reference_blocks: experimental block_reference.compile_blocks() result for this exact circuit. XORs the active blocks' reference deltas; not certified exact.
+    reference_provider: an exact get_many(patterns) provider for this circuit.
            Captures each shot's actual new losses and supplies its own valid reference record."""
-    assert ref_table is None or not (reload or canonical or gauge), "ref_table: no reload, plain mode"
+    assert ref_table is None or not (canonical or gauge), "ref_table: plain mode"
     if reference_blocks is not None:
         assert ref_table is None and not (canonical or gauge), "reference_blocks: plain mode only"
-        assert reference_blocks.reload == reload and reference_blocks.circuit == circuit.flattened()
+        assert reference_blocks.circuit == circuit.flattened()
     if reference_provider is not None:
         assert ref_table is None and reference_blocks is None and not (canonical or gauge), "reference_provider: plain mode only"
-        assert reference_provider.reload == reload and reference_provider.circuit == circuit.flattened()
+        assert reference_provider.circuit == circuit.flattened()
     if return_losses:
         assert ref_table is None and reference_blocks is None and reference_provider is None, "return_losses: plain mode only"
     track = return_losses or ref_table is not None or reference_blocks is not None or reference_provider is not None
@@ -220,13 +220,12 @@ def sample(circuit: stim.Circuit, shots: int, seed: int = 0, reload: bool = Fals
     coin = lambda p, k: rng.random((k, shots)) < p
 
     def reset(qs, basis):
-        ok = alive[qs] | reload
+        ok = alive[qs]
         r = rnd(len(qs))
         nx = {"Z": np.zeros_like(r), "X": r, "Y": r}[basis]
         nz = {"Z": r, "X": np.zeros_like(r), "Y": r}[basis]
         x[qs] = np.where(ok, nx, x[qs])
         z[qs] = np.where(ok, nz, z[qs])
-        alive[qs] |= reload
 
     for k, inst in enumerate(circuit.flattened()):
         for q, p, *cond in inserts.get(k, ()):   # canonical-run / gauge Paulis, masked by the
@@ -389,7 +388,7 @@ def reference_skeleton(circuit: stim.Circuit, software_feedforward: bool = False
     return out
 
 
-def lossy_reference(skeleton, losses, reload: bool = False):
+def lossy_reference(skeleton, losses):
     """Reference sample of the lossy circuit C_s with Pauli gates stripped (what the masked frame
     needs for loss pattern s), built as text; a lost readout becomes MPAD 0."""
     pending, i, lost, lines = sorted(losses.items()), 0, set(), []
@@ -409,13 +408,7 @@ def lossy_reference(skeleton, losses, reload: bool = False):
                     lines.append(f"{name} {'!' * inv}{q}")
                 else:
                     lines.append("MPAD 0")
-                    if reload and name.startswith("MR"):
-                        lost.discard(q)
-                        reset_name = {"Z": "R", "X": "RX", "Y": "RY"}[MEAS[name]]
-                        lines.append(f"{reset_name} {q}")
         else:
-            if reload and name in RESET:
-                lost.difference_update(qs)
             pairs = zip(qs[::2], qs[1::2]) if kind in ("two", "fft", "ffc") else ((q,) for q in qs)
             if kind == "fft":
                 keep = [str(q) for g in pairs if g[1] not in lost for q in g]
@@ -428,8 +421,7 @@ def lossy_reference(skeleton, losses, reload: bool = False):
     return stim.Circuit("\n".join(lines)).reference_sample()
 
 
-def explicit_lossy_circuit(circuit: stim.Circuit, losses, reload: bool = False,
-                           software_feedforward: bool = False) -> stim.Circuit:
+def explicit_lossy_circuit(circuit: stim.Circuit, losses, software_feedforward: bool = False) -> stim.Circuit:
     """C_s for one loss pattern, as an ordinary Stim circuit.
     losses = {instruction_index: [qubits lost right after that instruction]}; index -1: lost from the start.
     Operations on lost qubits are removed; a lost readout becomes a fresh |+> ancilla measured
@@ -454,13 +446,9 @@ def explicit_lossy_circuit(circuit: stim.Circuit, losses, reload: bool = False,
                 q = t.value
                 if q in lost:
                     out.append("RX", [anc]); out.append("M", [anc])
-                    if name.startswith("MR") and reload:
-                        lost.discard(q); out.append({"Z": "R", "X": "RX", "Y": "RY"}[MEAS[name]], [q])
                 else:
                     out.append(name, [t], inst.gate_args_copy())     # keeps an inverted target `!q`
         else:
-            if name in RESET and reload:
-                lost -= set(qs)
             two = stim.gate_data(name).is_two_qubit_gate
             groups = list(zip(qs[::2], qs[1::2])) if two else [(q,) for q in qs]
             if software_feedforward and inst.tag in ("feedforward_t", "feedforward_c"):    # see sample()
