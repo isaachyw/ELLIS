@@ -24,6 +24,25 @@ tableau reference.
   from a small prefix tableau and a CSS gauge sweep, and falls back to the full tableau when its checks
   fail.
 
+## Loss instructions
+
+ELLIS reads Stim circuits and adds two tagged `I_ERROR` instructions. Stim parses both and ignores them.
+
+| Instruction | Meaning |
+|---|---|
+| `I_ERROR[loss](p) q...` | Each atom `q` is lost with probability `p`. Its later gates are dropped and its readouts become fair coins. |
+| `I_ERROR[reload](p) q...` | Each empty slot `q` gets a fresh atom in \|0> with probability `p` (default 1). A present atom is left alone. |
+
+A reload happens only where its marker stands. To reload at a reset, write the marker just before it:
+
+```
+CX 0 1
+I_ERROR[loss](0.001) 0 1
+M 1
+I_ERROR[reload] 1
+R 1
+```
+
 ## Sampling performance
 
 <p>
