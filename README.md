@@ -1,4 +1,10 @@
-# ELLIS
+<p align="center">
+  <img src="docs/assets/logos/ellis-logo-light.png" width="220" alt="ELLIS logo">
+</p>
+
+# ELLIS: Extremely Fast Quantum Circuit Simulation under Qubit Loss and Leakage
+
+[![arXiv](https://img.shields.io/badge/Paper-2611.26173-B31B1B?style=flat-square)](https://arxiv.org/abs/2611.26173)
 
 ELLIS (Efficient Loss and Leakage Invariant-reference Simulation) samples Clifford circuits with atom loss
 exactly. It uses a masked Pauli frame and one shared reference record, so each shot does not need its own
@@ -72,4 +78,20 @@ sinter decoder.
 uv run pytest
 uv run python -m ellis.check_exact 'tests/fixtures/lightstim/*.stim'   # sampler vs Stim on random loss patterns
 uv run python tools/classify_lightstim.py --benchmark                  # paper App. C classification
+```
+
+## Citation
+
+If you find ELLIS useful in your work, please cite our paper:
+
+```bibtex
+@misc{hou2026ellis,
+      title={Ellis: Extremely Fast Quantum Circuit Simulation under Qubit Loss and Leakage},
+      author={Yuewen Hou and Gokul Subramanian Ravi},
+      year={2026},
+      eprint={2611.26173},
+      archivePrefix={arXiv},
+      primaryClass={quant-ph},
+      url={https://arxiv.org/abs/2611.26173},
+}
 ```
