@@ -22,13 +22,13 @@ import sinter
 import stim
 from sinter._decoding._stim_then_decode_sampler import _compile_decoder_with_disk_fallback, classify_discards_and_errors
 
-from ellis.certify import Certificate, certify
+from ellis.certify import MARKED, Certificate, certify
 from ellis.sampler import compile_sampler
 
 
 @functools.cache
 def _certificate(circuit_text: str) -> Certificate:
-    return certify(stim.Circuit(circuit_text))
+    return certify(stim.Circuit(circuit_text), model=MARKED)
 
 
 class MaskedFrameThenDecodeSampler(sinter.Sampler):
