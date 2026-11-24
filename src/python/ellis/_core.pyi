@@ -1,8 +1,9 @@
-"""Type stub for ellis._core, built from src/ellis and src/python/bindings.cc (see CMakeLists.txt)."""
+"""Type stub for ellis._core: the variant ellis._core_<VARIANT>, built from src/ellis and src/python/bindings.cc."""
 import numpy as np
 import numpy.typing as npt
 import stim
 
+VARIANT: str  # the SIMD variant loaded: 'avx2', 'sse2' or 'polyfill'
 SIMD_WIDTHS: list[int]
 
 class MaskFrameSampler:

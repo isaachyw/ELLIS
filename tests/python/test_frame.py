@@ -72,7 +72,7 @@ def native_matches_stim(c, losses, seed, simd_width, batch_size):
     return same_distribution(s.sample(n)[0], ex.compile_sampler(seed=seed).sample(n))
 
 
-@pytest.mark.parametrize("simd_width,batch_size", [(256, 256), (128, 128), (64, 64), (0, 0)])
+@pytest.mark.parametrize("simd_width,batch_size", [(w, w) for w in native.SIMD_WIDTHS] + [(0, 0)])
 def test_every_clifford_gate_matches_stim_under_loss(simd_width, batch_size):
     rng = np.random.default_rng(11)
     for t in range(150):
@@ -197,7 +197,7 @@ def test_noise_channels_match_stim(p):
         assert close(a, b, n), (prep, a, b)
 
 
-@pytest.mark.parametrize("simd_width,batch_size", [(256, 256), (64, 64)])
+@pytest.mark.parametrize("simd_width,batch_size", [(native.SIMD_WIDTHS[0],) * 2, (64, 64)])
 def test_reload_markers_match_stim_under_loss(simd_width, batch_size):
     rng = np.random.default_rng(29)
     for t in range(100):

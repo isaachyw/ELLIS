@@ -15,7 +15,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-include(SimdFlags)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)  # every module keeps its own copy of Stim to itself
+set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+
+include(SimdVariants)
 include(FetchStim)
 
 add_subdirectory(src/ellis)

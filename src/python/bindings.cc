@@ -146,7 +146,7 @@ struct StimSampler {
 
 }  // namespace
 
-PYBIND11_MODULE(_core, m) {
+PYBIND11_MODULE(ELLIS_MODULE_NAME, m) {
     m.doc() = "C++ masked Pauli-frame sampler for Clifford circuits with atom loss (gate-drop semantics).";
     m.attr("SIMD_WIDTHS") = maskframe::simd_widths();
 

@@ -1,9 +1,9 @@
-# Stim, pinned to the version of the `stim` Python package.  To build against a local checkout
-# instead, pass -DFETCHCONTENT_SOURCE_DIR_STIM=/path/to/Stim.  Only libstim is built (Stim's
-# CMakeLists also defines its CLI, perf and test targets); it reads SIMD_WIDTH from this scope.
+# Stim, pinned to the version of the `stim` Python package.  To build against a local checkout instead, pass
+# -DFETCHCONTENT_SOURCE_DIR_STIM=/path/to/Stim.  Stim's own CMakeLists is not used: its libstim has one SIMD width,
+# and ELLIS compiles Stim's sources once per SIMD variant (src/ellis/CMakeLists.txt).
 include(FetchContent)
 if(POLICY CMP0169)
-  cmake_policy(SET CMP0169 OLD)  # keep FetchContent_Populate + add_subdirectory(EXCLUDE_FROM_ALL)
+  cmake_policy(SET CMP0169 OLD)  # FetchContent_Populate: download only, no add_subdirectory
 endif()
 FetchContent_Declare(
   stim
@@ -13,6 +13,6 @@ FetchContent_Declare(
 FetchContent_GetProperties(stim)
 if(NOT stim_POPULATED)
   FetchContent_Populate(stim)
-  add_subdirectory(${stim_SOURCE_DIR} ${stim_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
-target_compile_options(libstim PRIVATE -g0 -w -fvisibility=hidden -fvisibility-inlines-hidden)
+file(STRINGS ${stim_SOURCE_DIR}/file_lists/source_files_no_main STIM_SOURCES)
+list(TRANSFORM STIM_SOURCES PREPEND ${stim_SOURCE_DIR}/)
