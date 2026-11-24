@@ -85,9 +85,10 @@ r = sampler.sample(10**6, bit_packed=True, threads=8)  # the same fields, bit-pa
 `certificate=` is given: sampling loses atoms only at the markers.
 `sample` returns a `SampleResult` with all four fields from one simulation pass; `bit_packed=True` uses Stim's
 layout. Detection events are relative to the noiseless reference sample, as in Stim.
+[docs/sampling.md](docs/sampling.md) is the full reference: supported operations, loss semantics, routing, result
+layout, heralds, and performance.
 
-`ellis.sinter.masked(decoder)` is a `sinter.Sampler`. It samples with `ellis.compile_sampler` and decodes with any
-sinter decoder.
+The sinter adapter `ellis.sinter` is under development.
 
 ## Layout
 
