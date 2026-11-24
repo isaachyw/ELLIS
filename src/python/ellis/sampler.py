@@ -19,7 +19,7 @@ import stim
 from ellis import _clifft
 from ellis import frame as mf
 from ellis._core import MaskFrameSampler
-from ellis.certify import Certificate, certify
+from ellis.certify import MARKED, Certificate, certify
 
 Method = Literal["frame", "clifft"]
 
@@ -98,7 +98,8 @@ def compile_sampler(circuit: stim.Circuit, *, method: Literal["auto", "frame", "
                     seed: int | None = None) -> Sampler:
     """A sampler for a Clifford circuit with `I_ERROR[loss](p)` / `I_ERROR[reload](p)` markers (see ellis.frame).
 
-    method="auto" routes by `certificate`, or by certify(circuit, **certify_options) when none is given: the C++ masked
+    method="auto" routes by `certificate`, or by certify(circuit, model=MARKED, **certify_options) when none is given
+    (sampling loses atoms only at the markers, so a circuit without markers is proven trivially): the C++ masked
     frame with the certified reference when it is proven exact without gauge Paulis, Clifft otherwise.
     method="frame" skips certify and uses a proven certificate's reference if given, else Stim's reference of the
     loss-free circuit, which is unverified (for speed comparisons).  method="clifft" always samples with Clifft.
@@ -111,7 +112,7 @@ def compile_sampler(circuit: stim.Circuit, *, method: Literal["auto", "frame", "
     mf.validate(circuit)
     if method == "auto":
         if certificate is None:
-            certificate = certify(circuit, **(certify_options or {}))
+            certificate = certify(circuit, **{"model": MARKED, **(certify_options or {})})
         method, reason = route(certificate)
     else:
         reason = f"method={method!r} requested"

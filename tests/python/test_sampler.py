@@ -62,6 +62,15 @@ def test_missing_clifft_names_the_verdict(monkeypatch):
     assert ellis.compile_sampler(surface_memory(3, 3, 1e-3, 1e-2)).method == "frame"
 
 
+def test_auto_certifies_only_the_marked_losses():
+    # contextual under PESSIMISTIC (certify's default without markers), but sampling never loses an atom here
+    unmarked = stim.Circuit("RX 2\nCX 2 0\nCZ 0 2\nCX 2 0\nMX 1\nCX 1 2\nMX 1")
+    assert certify(unmarked, n_random=0).verdict == "contextual"
+    s = ellis.compile_sampler(unmarked, seed=1)
+    assert (s.method, s.certificate.verdict) == ("frame", "proven")
+    assert ellis.compile_sampler(unmarked, certify_options={"model": certify(unmarked).model}).method == "clifft"
+
+
 @pytest.mark.parametrize("method", METHODS)
 def test_result_layout_and_bit_packing(method):
     c = surface_memory(3, 3, 0.01, 0.02)

@@ -81,7 +81,8 @@ r = sampler.sample_detectors(10**6, bit_packed=True, threads=8)  # detectors and
 | `method="frame"`                                         | C++ masked frame; Stim's reference (unverified) unless a proven certificate is given |
 | `method="clifft"`                                        | Clifft online                                                                        |
 
-`method="auto"` certifies with `ellis.certify.certify(circuit, **certify_options)` unless `certificate=` is given.
+`method="auto"` certifies with `ellis.certify.certify(circuit, model=MARKED, **certify_options)` unless
+`certificate=` is given: sampling loses atoms only at the markers.
 Results are `SampleResult`s; `bit_packed=True` uses Stim's layout. Detection events are relative to the noiseless
 reference sample, as in Stim.
 
