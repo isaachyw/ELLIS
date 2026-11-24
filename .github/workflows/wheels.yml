@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3  # setup-uv publishes no major-version tags
       - run: uv build --sdist --out-dir dist
       - run: tar tzf dist/*.tar.gz
       - uses: actions/upload-artifact@v7
