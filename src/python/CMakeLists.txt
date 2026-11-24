@@ -12,5 +12,15 @@ endforeach()
 pybind11_add_module(_cpu MODULE cpu.cc)
 install(TARGETS _cpu LIBRARY DESTINATION ellis)
 
-# Every module contains a compiled copy of Stim (Apache-2.0), so the wheel carries its license.
+# Every module contains compiled copies of Stim (Apache-2.0) and pybind11 (BSD-3-Clause, which requires its notice in
+# binary redistributions), so the wheel carries both licenses.  pybind11's comes from the pip package that provides
+# pybind11_DIR (site-packages/pybind11/share/cmake/pybind11), so it matches the version compiled in.
 install(FILES ${stim_SOURCE_DIR}/LICENSE DESTINATION ellis/licenses RENAME Stim-LICENSE)
+file(GLOB PYBIND11_LICENSE "${pybind11_DIR}/../../../../pybind11-*.dist-info/licenses/LICENSE"
+                           "${pybind11_DIR}/../../../../pybind11-*.dist-info/LICENSE")
+if(PYBIND11_LICENSE)
+  list(GET PYBIND11_LICENSE 0 PYBIND11_LICENSE)
+  install(FILES ${PYBIND11_LICENSE} DESTINATION ellis/licenses RENAME pybind11-LICENSE)
+else()
+  message(WARNING "pybind11's LICENSE not found next to ${pybind11_DIR}; the wheel will not carry it")
+endif()

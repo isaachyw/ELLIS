@@ -45,7 +45,7 @@ jobs:
       - uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_BUILD: ${{ matrix.python }}-*
-      - name: Check the wheel's ellis._core variants
+      - name: Check the wheel's ellis._core variants and bundled licenses
         run: |
           for whl in wheelhouse/*.whl; do
             echo "$whl"
@@ -53,6 +53,9 @@ jobs:
             expected=$(echo ${{ matrix.variants }} | tr ' ' '\n' | sort | tr '\n' ' ')
             echo "variants: $found"
             [ "$found" = "$expected" ] || { echo "expected: $expected"; exit 1; }
+            for lic in Stim-LICENSE pybind11-LICENSE; do
+              python3 -m zipfile -l "$whl" | grep -q "ellis/licenses/$lic" || { echo "missing ellis/licenses/$lic"; exit 1; }
+            done
           done
       - uses: actions/upload-artifact@v7
         with:
