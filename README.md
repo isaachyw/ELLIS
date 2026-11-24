@@ -71,7 +71,7 @@ circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)  # I_ERROR[loss](p)
 sampler = ellis.compile_sampler(circuit, seed=1)  # certifies: verdict "proven", method "frame-css"
 sampler.method                                    # "frame"
 r = sampler.sample(10**4)                         # r.measurements, r.detectors, r.observables, r.heralds
-r = sampler.sample_detectors(10**6, bit_packed=True, threads=8)  # detectors and observables only
+r = sampler.sample(10**6, bit_packed=True, threads=8)  # the same fields, bit-packed, on 8 threads
 ```
 
 | `compile_sampler` route                                  | Sampler                                                                              |
@@ -83,8 +83,8 @@ r = sampler.sample_detectors(10**6, bit_packed=True, threads=8)  # detectors and
 
 `method="auto"` certifies with `ellis.certify.certify(circuit, model=MARKED, **certify_options)` unless
 `certificate=` is given: sampling loses atoms only at the markers.
-Results are `SampleResult`s; `bit_packed=True` uses Stim's layout. Detection events are relative to the noiseless
-reference sample, as in Stim.
+`sample` returns a `SampleResult` with all four fields from one simulation pass; `bit_packed=True` uses Stim's
+layout. Detection events are relative to the noiseless reference sample, as in Stim.
 
 `ellis.sinter.masked(decoder)` is a `sinter.Sampler`. It samples with `ellis.compile_sampler` and decodes with any
 sinter decoder.

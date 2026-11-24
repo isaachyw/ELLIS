@@ -11,7 +11,6 @@
 
 #include "ellis/frame/rng.h"
 #include "ellis/frame/simulator.h"
-#include "stim/gates/gates.h"
 #include "stim/simulators/frame_simulator.h"
 
 #if defined(__AVX2__)
@@ -137,27 +136,23 @@ void run_batches(unsigned threads, size_t num_batches, BODY &&body) {
 }
 
 template <size_t W>
-void sample_w(const Program &prog, size_t shots, size_t batch, unsigned threads, uint64_t seed, bool detector_mode,
-              const Output &out) {
+void sample_w(const Program &prog, size_t shots, size_t batch, unsigned threads, uint64_t seed, const Output &out) {
     const auto &stats = prog.stats;
     run_batches(threads, (shots + batch - 1) / batch, [&](auto &claim) {
-        MaskedFrameSimulator<W> sim(prog, batch, detector_mode, out.heralds != nullptr);
+        MaskedFrameSimulator<W> sim(prog, batch, out.heralds != nullptr);
         RowWriter<W> writer;
         for (size_t b; (b = claim()) != SIZE_MAX;) {
             sim.run(batch_seed(seed, b));
             const size_t first = b * batch, count = std::min(batch, shots - first);
-            if (detector_mode) {
-                const auto &dets = sim.det_record.storage;
-                writer.write(dets.data.ptr_simd, dets.num_simd_words_minor, stats.num_detectors,
-                             prog.detector_flip.data(), out.main, out.bit_packed, first, count);
-                writer.write(sim.obs_record.data.ptr_simd, sim.obs_record.num_simd_words_minor, stats.num_observables,
-                             prog.observable_flip.data(), out.observables, out.bit_packed, first, count);
-            } else {
-                const auto &meas = sim.m_record.storage;
-                writer.write(meas.data.ptr_simd, meas.num_simd_words_minor, stats.num_measurements,
-                             prog.reference.data(), out.main, out.bit_packed, first, count);
-            }
+            const auto &meas = sim.m_record.storage;
+            const auto &dets = sim.det_record.storage;
             const auto &her = sim.herald_table;
+            writer.write(meas.data.ptr_simd, meas.num_simd_words_minor, stats.num_measurements, prog.reference.data(),
+                         out.measurements, out.bit_packed, first, count);
+            writer.write(dets.data.ptr_simd, dets.num_simd_words_minor, stats.num_detectors, prog.detector_flip.data(),
+                         out.detectors, out.bit_packed, first, count);
+            writer.write(sim.obs_record.data.ptr_simd, sim.obs_record.num_simd_words_minor, stats.num_observables,
+                         prog.observable_flip.data(), out.observables, out.bit_packed, first, count);
             writer.write(her.data.ptr_simd, her.num_simd_words_minor, stats.num_measurements, nullptr, out.heralds,
                          out.bit_packed, first, count);
         }
@@ -166,37 +161,25 @@ void sample_w(const Program &prog, size_t shots, size_t batch, unsigned threads,
 
 template <size_t W>
 void stim_sample_w(const stim::Circuit &circuit, const std::vector<uint8_t> &reference, size_t shots, size_t batch,
-                   unsigned threads, uint64_t seed, bool detector_mode, const Output &out) {
+                   unsigned threads, uint64_t seed, const Output &out) {
     const stim::CircuitStats stats = circuit.compute_stats();
     run_batches(threads, (shots + batch - 1) / batch, [&](auto &claim) {
-        stim::FrameSimulator<W> sim(
-            stats,
-            detector_mode ? stim::FrameSimulatorMode::STORE_DETECTIONS_TO_MEMORY
-                          : stim::FrameSimulatorMode::STORE_MEASUREMENTS_TO_MEMORY,
-            batch,
-            std::mt19937_64(0));
+        stim::FrameSimulator<W> sim(stats, stim::FrameSimulatorMode::STORE_EVERYTHING_TO_MEMORY, batch,
+                                    std::mt19937_64(0));
         RowWriter<W> writer;
         for (size_t b; (b = claim()) != SIZE_MAX;) {
             sim.rng.seed(batch_seed(seed, b));
             sim.reset_all();
-            circuit.for_each_operation([&](const stim::CircuitInstruction &op) {
-                sim.do_gate(op);
-                if (detector_mode && (stim::GATE_DATA[op.gate_type].flags & stim::GATE_PRODUCES_RESULTS)) {
-                    sim.m_record.mark_all_as_written();  // same bounded record as MaskedFrameSimulator
-                }
-            });
+            circuit.for_each_operation([&](const stim::CircuitInstruction &op) { sim.do_gate(op); });
             const size_t first = b * batch, count = std::min(batch, shots - first);
-            if (detector_mode) {
-                const auto &dets = sim.det_record.storage;
-                writer.write(dets.data.ptr_simd, dets.num_simd_words_minor, stats.num_detectors, nullptr, out.main,
-                             out.bit_packed, first, count);
-                writer.write(sim.obs_record.data.ptr_simd, sim.obs_record.num_simd_words_minor, stats.num_observables,
-                             nullptr, out.observables, out.bit_packed, first, count);
-            } else {
-                const auto &meas = sim.m_record.storage;
-                writer.write(meas.data.ptr_simd, meas.num_simd_words_minor, stats.num_measurements, reference.data(),
-                             out.main, out.bit_packed, first, count);
-            }
+            const auto &meas = sim.m_record.storage;
+            const auto &dets = sim.det_record.storage;
+            writer.write(meas.data.ptr_simd, meas.num_simd_words_minor, stats.num_measurements, reference.data(),
+                         out.measurements, out.bit_packed, first, count);
+            writer.write(dets.data.ptr_simd, dets.num_simd_words_minor, stats.num_detectors, nullptr, out.detectors,
+                         out.bit_packed, first, count);
+            writer.write(sim.obs_record.data.ptr_simd, sim.obs_record.num_simd_words_minor, stats.num_observables,
+                         nullptr, out.observables, out.bit_packed, first, count);
         }
     });
 }
@@ -236,38 +219,38 @@ size_t default_batch_size(const Program &prog, size_t simd_width) {
 }
 
 void sample(const Program &prog, size_t shots, size_t batch, size_t simd_width, unsigned threads, uint64_t seed,
-            bool detector_mode, const Output &out) {
+            const Output &out) {
     check_batch(batch, simd_width);
     switch (simd_width) {
 #if defined(__AVX2__)
         case 256:
-            return sample_w<256>(prog, shots, batch, threads, seed, detector_mode, out);
+            return sample_w<256>(prog, shots, batch, threads, seed, out);
 #endif
 #if defined(__SSE2__)
         case 128:
-            return sample_w<128>(prog, shots, batch, threads, seed, detector_mode, out);
+            return sample_w<128>(prog, shots, batch, threads, seed, out);
 #endif
         case 64:
-            return sample_w<64>(prog, shots, batch, threads, seed, detector_mode, out);
+            return sample_w<64>(prog, shots, batch, threads, seed, out);
         default:
             throw std::invalid_argument("unsupported simd_width " + std::to_string(simd_width));
     }
 }
 
 void stim_sample(const stim::Circuit &circuit, const std::vector<uint8_t> &reference, size_t shots, size_t batch,
-                 size_t simd_width, unsigned threads, uint64_t seed, bool detector_mode, const Output &out) {
+                 size_t simd_width, unsigned threads, uint64_t seed, const Output &out) {
     check_batch(batch, simd_width);
     switch (simd_width) {
 #if defined(__AVX2__)
         case 256:
-            return stim_sample_w<256>(circuit, reference, shots, batch, threads, seed, detector_mode, out);
+            return stim_sample_w<256>(circuit, reference, shots, batch, threads, seed, out);
 #endif
 #if defined(__SSE2__)
         case 128:
-            return stim_sample_w<128>(circuit, reference, shots, batch, threads, seed, detector_mode, out);
+            return stim_sample_w<128>(circuit, reference, shots, batch, threads, seed, out);
 #endif
         case 64:
-            return stim_sample_w<64>(circuit, reference, shots, batch, threads, seed, detector_mode, out);
+            return stim_sample_w<64>(circuit, reference, shots, batch, threads, seed, out);
         default:
             throw std::invalid_argument("unsupported simd_width " + std::to_string(simd_width));
     }

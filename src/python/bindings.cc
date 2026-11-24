@@ -86,35 +86,19 @@ struct MaskFrameSampler {
         return config.batch_size ? config.batch_size : maskframe::default_batch_size(prog, config.simd_width);
     }
 
-    py::object sample(size_t shots, bool bit_packed, bool heralds, unsigned threads) {
-        py::array meas = bit_array(shots, prog.stats.num_measurements, bit_packed);
-        py::array her = bit_array(heralds ? shots : 0, prog.stats.num_measurements, bit_packed);
-        maskframe::Output out{data(meas), nullptr, heralds ? data(her) : nullptr, bit_packed};
+    py::tuple sample(size_t shots, bool bit_packed, unsigned threads) {
+        const auto &st = prog.stats;
+        py::array meas = bit_array(shots, st.num_measurements, bit_packed);
+        py::array dets = bit_array(shots, st.num_detectors, bit_packed);
+        py::array obs = bit_array(shots, st.num_observables, bit_packed);
+        py::array her = bit_array(shots, st.num_measurements, bit_packed);
+        maskframe::Output out{data(meas), data(dets), data(obs), data(her), bit_packed};
         const uint64_t seed = config.next_seed();
         {
             py::gil_scoped_release release;
-            maskframe::sample(prog, shots, batch(), config.simd_width, threads, seed, false, out);
+            maskframe::sample(prog, shots, batch(), config.simd_width, threads, seed, out);
         }
-        if (heralds) {
-            return py::make_tuple(meas, her);
-        }
-        return meas;
-    }
-
-    py::object sample_detectors(size_t shots, bool bit_packed, bool heralds, unsigned threads) {
-        py::array dets = bit_array(shots, prog.stats.num_detectors, bit_packed);
-        py::array obs = bit_array(shots, prog.stats.num_observables, bit_packed);
-        py::array her = bit_array(heralds ? shots : 0, prog.stats.num_measurements, bit_packed);
-        maskframe::Output out{data(dets), data(obs), heralds ? data(her) : nullptr, bit_packed};
-        const uint64_t seed = config.next_seed();
-        {
-            py::gil_scoped_release release;
-            maskframe::sample(prog, shots, batch(), config.simd_width, threads, seed, true, out);
-        }
-        if (heralds) {
-            return py::make_tuple(dets, obs, her);
-        }
-        return py::make_tuple(dets, obs);
+        return py::make_tuple(meas, dets, obs, her);
     }
 
     py::array reference() const {
@@ -139,7 +123,7 @@ struct StimSampler {
         return config.batch_size ? config.batch_size : 1024;
     }
 
-    py::array sample(size_t shots, bool bit_packed, unsigned threads) {
+    py::tuple sample(size_t shots, bool bit_packed, unsigned threads) {
         if (reference.size() != stats.num_measurements) {
             const auto bits = stim::TableauSimulator<stim::MAX_BITWORD_WIDTH>::reference_sample_circuit(circuit);
             reference.assign(stats.num_measurements, 0);
@@ -148,25 +132,15 @@ struct StimSampler {
             }
         }
         py::array meas = bit_array(shots, stats.num_measurements, bit_packed);
-        maskframe::Output out{data(meas), nullptr, nullptr, bit_packed};
-        const uint64_t seed = config.next_seed();
-        {
-            py::gil_scoped_release release;
-            maskframe::stim_sample(circuit, reference, shots, batch(), config.simd_width, threads, seed, false, out);
-        }
-        return meas;
-    }
-
-    py::tuple sample_detectors(size_t shots, bool bit_packed, unsigned threads) {
         py::array dets = bit_array(shots, stats.num_detectors, bit_packed);
         py::array obs = bit_array(shots, stats.num_observables, bit_packed);
-        maskframe::Output out{data(dets), data(obs), nullptr, bit_packed};
+        maskframe::Output out{data(meas), data(dets), data(obs), nullptr, bit_packed};
         const uint64_t seed = config.next_seed();
         {
             py::gil_scoped_release release;
-            maskframe::stim_sample(circuit, reference, shots, batch(), config.simd_width, threads, seed, true, out);
+            maskframe::stim_sample(circuit, reference, shots, batch(), config.simd_width, threads, seed, out);
         }
-        return py::make_tuple(dets, obs);
+        return py::make_tuple(meas, dets, obs);
     }
 };
 
@@ -195,19 +169,13 @@ Args:
 )DOC")
         .def(py::init<const py::object &, const py::object &, const py::object &, size_t, size_t>(), "circuit"_a,
              py::kw_only(), "reference"_a = py::none(), "seed"_a = py::none(), "batch_size"_a = 0, "simd_width"_a = 0)
-        .def("sample", &MaskFrameSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false,
-             "heralds"_a = true, "threads"_a = 1,
-             R"DOC(Samples measurement records.
+        .def("sample", &MaskFrameSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false, "threads"_a = 1,
+             R"DOC(Samples measurements, detection events, observable flips and heralds in one simulation pass.
 
-Returns (measurements, heralds), each (shots, num_measurements): bool arrays, or uint8 arrays of
-little-endian packed bits if bit_packed.  heralds[s, i] is 1 when measurement i of shot s read a lost
-qubit.  With heralds=False only the measurements are returned.)DOC")
-        .def("sample_detectors", &MaskFrameSampler::sample_detectors, "shots"_a, py::kw_only(),
-             "bit_packed"_a = false, "heralds"_a = false, "threads"_a = 1,
-             R"DOC(Samples detection events (Stim's convention) and observable flips.
-
-Returns (detectors, observables) or, with heralds=True, (detectors, observables, heralds) where
-heralds are per measurement as in sample().)DOC")
+Returns (measurements, detectors, observables, heralds), each (shots, n): bool arrays, or uint8 arrays of
+little-endian packed bits if bit_packed.  Detection events and observable flips follow Stim's convention
+(relative to Stim's noiseless reference sample).  heralds[s, i] is 1 when measurement i of shot s read a
+lost qubit.)DOC")
         .def_property_readonly("reference", &MaskFrameSampler::reference)
         .def_property_readonly("num_qubits", [](const MaskFrameSampler &s) { return s.prog.stats.num_qubits; })
         .def_property_readonly("num_measurements", [](const MaskFrameSampler &s) { return s.prog.stats.num_measurements; })
@@ -223,9 +191,8 @@ and run through the same batching, threading and output code as MaskFrameSampler
 )DOC")
         .def(py::init<const py::object &, const py::object &, size_t, size_t>(), "circuit"_a, py::kw_only(),
              "seed"_a = py::none(), "batch_size"_a = 0, "simd_width"_a = 0)
-        .def("sample", &StimSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false, "threads"_a = 1)
-        .def("sample_detectors", &StimSampler::sample_detectors, "shots"_a, py::kw_only(), "bit_packed"_a = false,
-             "threads"_a = 1)
+        .def("sample", &StimSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false, "threads"_a = 1,
+             "(measurements, detectors, observables) from one simulation pass.")
         .def_property_readonly("simd_width", [](const StimSampler &s) { return s.config.simd_width; })
         .def_property_readonly("batch_size", &StimSampler::batch);
 }

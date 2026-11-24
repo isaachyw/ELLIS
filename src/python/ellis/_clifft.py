@@ -57,14 +57,7 @@ class Backend:
         dets, obs = circuit.compile_m2d_converter().convert(measurements=zero, separate_observables=True)
         self._detector_flip, self._observable_flip = dets[0].astype(np.uint8), obs[0].astype(np.uint8)
 
-    def _run(self, shots: int, threads: int):
-        return self.program.sample(shots, seed=int(self._seeds.integers(2**63)), threads=threads)
-
     def sample(self, shots: int, bit_packed: bool, threads: int):
-        r = self._run(shots, threads)
-        return _bits(r.measurements, bit_packed), _bits(r.heralds, bit_packed)
-
-    def sample_detectors(self, shots: int, bit_packed: bool, heralds: bool, threads: int):
-        r = self._run(shots, threads)
-        return (_bits(r.detectors ^ self._detector_flip, bit_packed), _bits(r.observables ^ self._observable_flip, bit_packed),
-                _bits(r.heralds, bit_packed) if heralds else None)
+        r = self.program.sample(shots, seed=int(self._seeds.integers(2**63)), threads=threads)
+        return (_bits(r.measurements, bit_packed), _bits(r.detectors ^ self._detector_flip, bit_packed),
+                _bits(r.observables ^ self._observable_flip, bit_packed), _bits(r.heralds, bit_packed))

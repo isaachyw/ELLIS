@@ -49,7 +49,7 @@ class _CompiledMaskedFrameThenDecodeSampler(sinter.CompiledSampler):
 
     def sample(self, suggested_shots: int) -> sinter.AnonTaskStats:
         t0 = time.monotonic()
-        r = self.sampler.sample_detectors(suggested_shots, bit_packed=True, heralds=True)
+        r = self.sampler.sample(suggested_shots, bit_packed=True)
         dets, actual_obs, heralds = r.detectors, r.observables, r.heralds
         num_shots = dets.shape[0]
         custom_counts = collections.Counter({"shots_with_loss": int(np.count_nonzero(heralds.any(axis=1)))})

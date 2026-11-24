@@ -1,8 +1,7 @@
 """One sampling API for Clifford circuits with atom loss.
 
-    s = ellis.compile_sampler(circuit)               # certifies the circuit, then picks the sampler
-    r = s.sample(10**5)                              # SampleResult: measurements, detectors, observables, heralds
-    r = s.sample_detectors(10**6, bit_packed=True)   # detectors and observables only (the fast path)
+    s = ellis.compile_sampler(circuit)   # certifies the circuit, then picks the sampler
+    r = s.sample(10**5)                  # SampleResult: measurements, detectors, observables, heralds
 
 When ellis.certify proves that one reference record is exact for every loss pattern, the circuit samples with the C++
 masked frame (ellis._core.MaskFrameSampler) and that reference.  Otherwise it samples with Clifft's noncomputational
@@ -10,7 +9,6 @@ sampler in online mode (ellis._clifft, the optional `clifft` extra), which simul
 Both use gate-drop loss semantics; see ellis.frame.
 """
 from dataclasses import dataclass
-from functools import cached_property
 from typing import Literal, Protocol
 
 import numpy as np
@@ -27,12 +25,12 @@ Method = Literal["frame", "clifft"]
 @dataclass(frozen=True)
 class SampleResult:
     """Per-shot rows: bool (shots, n) arrays, or with bit_packed uint8 (shots, ceil(n / 8)) arrays in little-endian bit
-    order (Stim's layout).  A field is None when the call does not produce it.  Detectors and observables are relative
-    to Stim's noiseless reference sample, as in Stim; heralds[s, i] is 1 when measurement i of shot s read a lost qubit."""
-    measurements: np.ndarray | None
-    detectors: np.ndarray | None
-    observables: np.ndarray | None
-    heralds: np.ndarray | None
+    order (Stim's layout).  Detectors and observables are relative to Stim's noiseless reference sample, as in Stim;
+    heralds[s, i] is 1 when measurement i of shot s read a lost qubit."""
+    measurements: np.ndarray
+    detectors: np.ndarray
+    observables: np.ndarray
+    heralds: np.ndarray
 
 
 def route(certificate: Certificate) -> tuple[Method, str]:
@@ -45,9 +43,8 @@ def route(certificate: Certificate) -> tuple[Method, str]:
 
 
 class _Backend(Protocol):
-    def sample(self, shots: int, bit_packed: bool, threads: int) -> tuple[np.ndarray, np.ndarray]: ...
-    def sample_detectors(self, shots: int, bit_packed: bool, heralds: bool,
-                         threads: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]: ...
+    def sample(self, shots: int, bit_packed: bool, threads: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """(measurements, detectors, observables, heralds)."""
 
 
 class _Frame:
@@ -57,10 +54,6 @@ class _Frame:
 
     def sample(self, shots, bit_packed, threads):
         return self._sampler.sample(shots, bit_packed=bit_packed, threads=threads)
-
-    def sample_detectors(self, shots, bit_packed, heralds, threads):
-        out = self._sampler.sample_detectors(shots, bit_packed=bit_packed, heralds=heralds, threads=threads)
-        return out if heralds else (*out, None)
 
 
 _BACKENDS = {"frame": _Frame, "clifft": lambda circuit, certificate, seed: _clifft.Backend(circuit, seed)}
@@ -74,23 +67,11 @@ class Sampler:
         self.method, self.reason, self.certificate = method, reason, certificate
         self.num_qubits, self.num_measurements = circuit.num_qubits, circuit.num_measurements
         self.num_detectors, self.num_observables = circuit.num_detectors, circuit.num_observables
-        self._circuit, self._backend = circuit, backend
-
-    @cached_property
-    def _m2d(self):
-        return self._circuit.compile_m2d_converter()
+        self._backend = backend
 
     def sample(self, shots: int, *, bit_packed: bool = False, threads: int = 1) -> SampleResult:
-        """Measurements and heralds, with the detectors and observables they imply."""
-        m, heralds = self._backend.sample(shots, bit_packed, threads)
-        dets, obs = self._m2d.convert(measurements=m, separate_observables=True, bit_packed=bit_packed)
-        return SampleResult(m, dets, obs, heralds)
-
-    def sample_detectors(self, shots: int, *, bit_packed: bool = False, heralds: bool = False,
-                         threads: int = 1) -> SampleResult:
-        """Detectors and observables (plus per-measurement heralds if asked), without the measurement record."""
-        dets, obs, her = self._backend.sample_detectors(shots, bit_packed, heralds, threads)
-        return SampleResult(None, dets, obs, her)
+        """Measurements, detectors, observables and heralds of `shots` shots, from one simulation pass."""
+        return SampleResult(*self._backend.sample(shots, bit_packed, threads))
 
 
 def compile_sampler(circuit: stim.Circuit, *, method: Literal["auto", "frame", "clifft"] = "auto",

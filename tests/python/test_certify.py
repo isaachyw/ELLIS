@@ -25,7 +25,7 @@ def parity(x):
 def pattern_space(circ, losses, seed, reference):
     """(V_s span, masked-frame sample a_s, exact Stim sample b_s) of the lossy circuit C_s."""
     n = circ.num_measurements + 64
-    a = MaskFrameSampler(mark_losses(circ, losses), reference=reference, seed=seed).sample(n, heralds=False)
+    a = MaskFrameSampler(mark_losses(circ, losses), reference=reference, seed=seed).sample(n)[0]
     b = mf.explicit_lossy_circuit(circ, losses).compile_sampler(seed=seed).sample(n)
     A, B = to_ints(a), to_ints(b)
     V = Span()
@@ -234,7 +234,7 @@ def test_reload_markers(marker):
     assert any(k_marker in s for s in fam) == ("(" in marker)     # failures are tested where reloads can fail
     for i, s in enumerate(fam):
         n = late.num_measurements + 100
-        a = MaskFrameSampler(mark_losses(always, s), reference=rel.reference, seed=i).sample(n, heralds=False)
+        a = MaskFrameSampler(mark_losses(always, s), reference=rel.reference, seed=i).sample(n)[0]
         b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s
 

@@ -45,7 +45,7 @@ def mark_losses(circuit, losses):
 def compare(circ, losses, seed):
     m = circ.num_measurements
     N = m + 64
-    a = MaskFrameSampler(mark_losses(circ, losses), seed=seed).sample(N, heralds=False)
+    a = MaskFrameSampler(mark_losses(circ, losses), seed=seed).sample(N)[0]
     b = mf.explicit_lossy_circuit(circ, losses).compile_sampler(seed=seed).sample(N)
     A, B = to_ints(a), to_ints(b)
     va, vb, vj = Span(), Span(), Span()

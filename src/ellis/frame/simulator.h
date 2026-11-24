@@ -31,7 +31,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
     using Word = stim::bitword<W>;
 
     const Program &prog;
-    const bool detector_mode;              // keep detection events, and only the recent measurements
     const bool keep_heralds;
     const unsigned log_batch;              // the batch size is a power of two
     stim::simd_bit_table<W> alive_table;   // alive_table[q][s]: qubit q is present in shot s
@@ -39,14 +38,9 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
     stim::simd_bits<W> scratch;            // 4 rows, for PAULI_CHANNEL_2 and reload
     uint64_t num_results = 0;
 
-    MaskedFrameSimulator(const Program &prog, size_t batch, bool detector_mode, bool keep_heralds)
-        : Base(prog.stats,
-               detector_mode ? stim::FrameSimulatorMode::STORE_DETECTIONS_TO_MEMORY
-                             : stim::FrameSimulatorMode::STORE_MEASUREMENTS_TO_MEMORY,
-               batch,
-               std::mt19937_64(0)),
+    MaskedFrameSimulator(const Program &prog, size_t batch, bool keep_heralds)
+        : Base(prog.stats, stim::FrameSimulatorMode::STORE_EVERYTHING_TO_MEMORY, batch, std::mt19937_64(0)),
           prog(prog),
-          detector_mode(detector_mode),
           keep_heralds(keep_heralds),
           log_batch((unsigned)std::countr_zero(batch)),
           alive_table(prog.stats.num_qubits, batch),
@@ -105,7 +99,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                     case GateType::MRY: measure<1, true>(inst); break;
                     default: measure<2, true>(inst); break;
                 }
-                forget_old_measurements();
                 return;
             case Kind::MPAD:
                 this->do_MPAD(inst);
@@ -114,7 +107,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
                         herald_table[num_results].clear();
                     }
                 }
-                forget_old_measurements();
                 return;
             case Kind::DEPOLARIZE2:
                 depolarize2(inst);
@@ -128,13 +120,6 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
             case Kind::RELOAD:
                 reload(inst);
                 return;
-        }
-    }
-
-    /// In detector mode only the last max_lookback measurements are needed (Stim's streaming trick).
-    MASKFRAME_INLINE void forget_old_measurements() {
-        if (detector_mode) {
-            this->m_record.mark_all_as_written();
         }
     }
 

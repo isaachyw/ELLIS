@@ -80,16 +80,28 @@ def test_result_layout_and_bit_packing(method):
     r = s.sample(n)
     assert [x.shape for x in (r.measurements, r.detectors, r.observables, r.heralds)] == [(n, M), (n, D), (n, O), (n, M)]
     assert all(x.dtype == bool for x in (r.measurements, r.detectors, r.observables, r.heralds))
-    d, o = c.compile_m2d_converter().convert(measurements=r.measurements, separate_observables=True)
-    assert (d == r.detectors).all() and (o == r.observables).all() and r.heralds.any()
     packed = ellis.compile_sampler(c, method=method, seed=5).sample(n, bit_packed=True)
     for name in ("measurements", "detectors", "observables", "heralds"):
         a, b = getattr(r, name), getattr(packed, name)
         assert b.dtype == np.uint8 and (np.packbits(a, axis=1, bitorder="little") == b).all(), name
-    r = s.sample_detectors(n)
-    assert r.measurements is None and r.heralds is None and r.detectors.shape == (n, D) and r.detectors.dtype == bool
-    r = s.sample_detectors(n, bit_packed=True, heralds=True, threads=2)
-    assert [x.shape for x in (r.detectors, r.observables, r.heralds)] == [(n, (D + 7) // 8), (n, 1), (n, (M + 7) // 8)]
+    r = s.sample(n, bit_packed=True, threads=2)
+    assert [x.shape for x in (r.measurements, r.detectors, r.observables, r.heralds)] == [
+        (n, (M + 7) // 8), (n, (D + 7) // 8), (n, 1), (n, (M + 7) // 8)]
+
+
+@pytest.mark.parametrize("method", METHODS)
+@pytest.mark.parametrize("bit_packed", [False, True])
+@pytest.mark.parametrize("reload", [False, True])
+def test_detectors_are_stims_m2d_of_the_measurements(method, bit_packed, reload):
+    # Pauli gates, an inverted readout and MPAD make the detector constants nonzero on the frame route
+    c = stim.Circuit("R 0 1\nX 0\nM 0 !1\nMPAD 1\nDETECTOR rec[-3]\nDETECTOR rec[-2]\nDETECTOR rec[-1]\n"
+                     "OBSERVABLE_INCLUDE(0) rec[-3] rec[-1]") + surface_memory(3, 3, 0.02, 0.03)
+    if reload:
+        c = fo.reload_at_resets(c)[0]
+    r = ellis.compile_sampler(c, method=method, seed=8).sample(3000, bit_packed=bit_packed, threads=2)
+    d, o = c.compile_m2d_converter().convert(measurements=r.measurements, separate_observables=True, bit_packed=bit_packed)
+    assert (d == r.detectors).all() and (o == r.observables).all()
+    assert r.detectors.any() and r.observables.any() and r.heralds.any()
 
 
 @pytest.mark.parametrize("method", METHODS)
@@ -98,7 +110,7 @@ def test_noiseless_lossless_detectors_are_zero(method):
     c = stim.Circuit("R 0 1\nX 0\nM 0 !1\nMPAD 1\nDETECTOR rec[-3]\nDETECTOR rec[-2]\nDETECTOR rec[-1]\n"
                      "OBSERVABLE_INCLUDE(0) rec[-3] rec[-1]") + surface_memory(3, 3, 0.0, 0.0)
     s = ellis.compile_sampler(c, method=method, seed=2)
-    for r in (s.sample(200), s.sample_detectors(200, heralds=True)):
+    for r in (s.sample(200), s.sample(200, bit_packed=True)):
         assert not r.detectors.any() and not r.observables.any() and not r.heralds.any()
 
 
@@ -168,8 +180,8 @@ def test_frame_and_clifft_agree_on_lossy_surface_memory(reload):
         c = fo.reload_at_resets(c)[0]
     s = ellis.compile_sampler(c, seed=6)
     assert s.method == "frame"
-    a = s.sample_detectors(n, heralds=True)
-    b = ellis.compile_sampler(c, method="clifft", seed=6).sample_detectors(n, heralds=True)
+    a = s.sample(n)
+    b = ellis.compile_sampler(c, method="clifft", seed=6).sample(n)
     assert close(a.detectors.mean(0), b.detectors.mean(0), n) and close(a.heralds.mean(0), b.heralds.mean(0), n)
     assert close(a.observables.mean(0), b.observables.mean(0), n) and 0.1 < a.heralds.any(1).mean() < 0.99
 

@@ -1,7 +1,7 @@
 """C++ masked-frame sampler (ellis._core): exact against Stim under gate-drop loss for every Clifford gate (with and
 without reload markers at the resets, every SIMD width, several batches per call, repeated targets, inverted
-measurements and MPAD), consistent with Stim when nothing is lost and with itself across output modes, packing and
-thread counts; unsupported operations are rejected loudly."""
+measurements and MPAD), consistent with Stim when nothing is lost, with Stim's m2d of its own measurements, and with
+itself across packing and thread counts; unsupported operations are rejected loudly."""
 from pathlib import Path
 
 import frame_oracle as fo
@@ -69,7 +69,7 @@ def native_matches_stim(c, losses, seed, simd_width, batch_size):
     ref = mf.strip_loss(ex).reference_sample()
     n = c.num_measurements + 64
     s = native.MaskFrameSampler(mark_losses(c, losses), reference=ref, seed=seed, simd_width=simd_width, batch_size=batch_size)
-    return same_distribution(s.sample(n, heralds=False), ex.compile_sampler(seed=seed).sample(n))
+    return same_distribution(s.sample(n)[0], ex.compile_sampler(seed=seed).sample(n))
 
 
 @pytest.mark.parametrize("simd_width,batch_size", [(256, 256), (128, 128), (64, 64), (0, 0)])
@@ -84,9 +84,9 @@ def test_every_clifford_gate_matches_stim_under_loss(simd_width, batch_size):
 
 
 def test_repeated_targets_inversions_and_mpad():
-    assert native.MaskFrameSampler(stim.Circuit("RX 0\nS 0 0\nMX 0"), seed=1).sample(200, heralds=False).all()
+    assert native.MaskFrameSampler(stim.Circuit("RX 0\nS 0 0\nMX 0"), seed=1).sample(200)[0].all()
     c = stim.Circuit("R 0\nM !0\nMPAD 1 0\nM 0")
-    assert (native.MaskFrameSampler(c, seed=1).sample(50, heralds=False) == [1, 1, 0, 0]).all()
+    assert (native.MaskFrameSampler(c, seed=1).sample(50)[0] == [1, 1, 0, 0]).all()
     assert mf.explicit_lossy_circuit(c, {}).reference_sample().tolist() == [1, 1, 0, 0]
 
 
@@ -104,7 +104,7 @@ def test_loss_drops_gates_and_heralds():
     plain = stim.Circuit("R 0 1\nX 0\nCX 0 1\nM 0 1\nR 0\nM 0")
     for reload in (False, True):
         c, move = fo.reload_at_resets(plain) if reload else (plain, lambda s: s)
-        meas, her = native.MaskFrameSampler(mark_losses(c, move({1: [0]})), seed=2).sample(4000)
+        meas, _, _, her = native.MaskFrameSampler(mark_losses(c, move({1: [0]})), seed=2).sample(4000)
         assert her[:, 0].all() and not her[:, 1].any() and (her[:, 2] == (not reload)).all()
         assert not meas[:, 1].any()                       # the CX was dropped
         assert 0.45 < meas[:, 0].mean() < 0.55            # lost readout: uniform placeholder
@@ -116,7 +116,7 @@ def test_loss_probability_per_site(p):
     """Each I_ERROR[loss](p) target is lost independently with probability p (Poisson hits are exact)."""
     k, n = 3, 200000
     c = stim.Circuit("R 0 1 2 3\n" + f"I_ERROR[loss]({p}) 0 1 2 3\n" * k + "M 0 1 2 3")
-    _, her = native.MaskFrameSampler(c, seed=4, batch_size=1024).sample(n)
+    her = native.MaskFrameSampler(c, seed=4, batch_size=1024).sample(n)[3]
     lost = 1 - (1 - p) ** k
     assert close(her.mean(0), np.full(4, lost), n)
     assert close(np.array([(her[:, 0] & her[:, 1]).mean()]), np.array([lost ** 2]), n)   # independent sites
@@ -135,20 +135,18 @@ def surface_with_reloads(reload, **kw):
 
 @pytest.mark.parametrize("reload", [False, True])
 def test_detectors_are_measurement_parities(reload):
-    """Same seed and batch size: detector mode (ring-buffered record) reproduces Stim's m2d of sample()."""
+    """The detectors and observables computed in the simulation pass are Stim's m2d of its measurements."""
     c = surface_with_reloads(reload, p_loss=0.03)
-    meas, her = native.MaskFrameSampler(c, seed=5, batch_size=512).sample(3000)
-    dets, obs, her2 = native.MaskFrameSampler(c, seed=5, batch_size=512).sample_detectors(3000, heralds=True)
+    meas, dets, obs, her = native.MaskFrameSampler(c, seed=5, batch_size=512).sample(3000)
     d2, o2 = c.compile_m2d_converter().convert(measurements=meas, separate_observables=True)
-    assert (dets == d2).all() and (obs == o2).all() and (her == her2).all()
+    assert (dets == d2).all() and (obs == o2).all() and her.any() and dets.any()
 
 
 def test_pauli_gates_and_custom_reference_keep_stims_detector_convention():
     c = stim.Circuit("R 0 1\nX 0\nM 0 1\nDETECTOR rec[-2]\nDETECTOR rec[-1]\nOBSERVABLE_INCLUDE(0) rec[-2]")
     for ref in (None, [0, 1]):          # [0, 1] flips measurement 1: a detection event in every shot
         s = native.MaskFrameSampler(c, reference=ref, seed=1)
-        meas = s.sample(100, heralds=False)
-        dets, obs = s.sample_detectors(100)
+        meas, dets, obs, _ = s.sample(100)
         assert (meas == [1, ref is not None]).all() and not dets[:, 0].any() and not obs.any()
         assert (dets[:, 1] == (ref is not None)).all()
 
@@ -160,9 +158,6 @@ def test_threads_and_bit_packing_do_not_change_results():
     base, multi, packed = run(), run(threads=4), run(bit_packed=True)
     assert all((x == y).all() for x, y in zip(base, multi))
     assert all((np.packbits(x, axis=1, bitorder="little") == y).all() for x, y in zip(base, packed))
-    dets = native.MaskFrameSampler(c, seed=3).sample_detectors(5000, threads=3)
-    dets_packed = native.MaskFrameSampler(c, seed=3).sample_detectors(5000, bit_packed=True)
-    assert all((np.packbits(x, axis=1, bitorder="little") == y).all() for x, y in zip(dets, dets_packed))
 
 
 def test_bit_identical_to_stim_frame_simulator_when_nothing_is_lost():
@@ -174,9 +169,7 @@ def test_bit_identical_to_stim_frame_simulator_when_nothing_is_lost():
         return native.MaskFrameSampler(c, **kw), native.StimSampler(c, **kw)
     for simd_width in native.SIMD_WIDTHS:
         a, b = pair(simd_width)
-        assert (a.sample(2000, heralds=False) == b.sample(2000)).all()
-        a, b = pair(simd_width)
-        assert all((x == y).all() for x, y in zip(a.sample_detectors(2000), b.sample_detectors(2000)))
+        assert all((x == y).all() for x, y in zip(a.sample(2000), b.sample(2000)))
 
 
 def test_lossless_detector_rates_match_stim():
@@ -185,8 +178,8 @@ def test_lossless_detector_rates_match_stim():
                                before_measure_flip_probability=0.02, after_reset_flip_probability=0.02)
     n = 50000
     d0 = np.asarray(c.compile_detector_sampler(seed=1).sample(n)).mean(0)
-    d1 = native.MaskFrameSampler(c, seed=1).sample_detectors(n)[0].mean(0)
-    d2 = native.StimSampler(c, seed=1).sample_detectors(n)[0].mean(0)
+    d1 = native.MaskFrameSampler(c, seed=1).sample(n)[1].mean(0)
+    d2 = native.StimSampler(c, seed=1).sample(n)[1].mean(0)
     assert close(d0, d1, n) and close(d0, d2, n)
 
 
@@ -200,7 +193,7 @@ def test_noise_channels_match_stim(p):
         def stats(m):
             return np.concatenate([m.mean(0), [(m[:, 4] & m[:, 5]).mean(), (m[:, 7] & m[:, 8]).mean()]])
         a = stats(c.compile_sampler(seed=1).sample(n))
-        b = stats(native.MaskFrameSampler(c, seed=1).sample(n, heralds=False))
+        b = stats(native.MaskFrameSampler(c, seed=1).sample(n)[0])
         assert close(a, b, n), (prep, a, b)
 
 
@@ -217,15 +210,15 @@ def test_reload_markers_match_stim_under_loss(simd_width, batch_size):
 
 def test_reload_marker_restores_a_lost_atom_in_zero():
     c = stim.Circuit("R 0 1\nX 0\nI_ERROR[loss](1) 0\nI_ERROR[reload] 0\nM 0\nCX 0 1\nM 1")
-    m, h = native.MaskFrameSampler(c, seed=3).sample(200)
+    m, _, _, h = native.MaskFrameSampler(c, seed=3).sample(200)
     assert not m.any() and not h.any()
-    m = native.MaskFrameSampler(stim.Circuit("RX 0\nI_ERROR[reload] 0\nMX 0"), seed=3).sample(200, heralds=False)
+    m = native.MaskFrameSampler(stim.Circuit("RX 0\nI_ERROR[reload] 0\nMX 0"), seed=3).sample(200)[0]
     assert not m.any()                                    # a present atom keeps |+>
 
 
 @pytest.mark.parametrize("p", [0.0, 0.3, 1.0])
 def test_reload_marker_succeeds_with_probability_p(p):
     n = 20000
-    m, h = native.MaskFrameSampler(stim.Circuit(f"R 0\nI_ERROR[loss](1) 0\nI_ERROR[reload]({p}) 0\nM 0"), seed=4).sample(n)
+    m, _, _, h = native.MaskFrameSampler(stim.Circuit(f"R 0\nI_ERROR[loss](1) 0\nI_ERROR[reload]({p}) 0\nM 0"), seed=4).sample(n)
     assert abs(h.mean() - (1 - p)) < 5 * np.sqrt(p * (1 - p) / n) + 1e-9
     assert not m[~h].any()                                # a reloaded atom reads its fresh |0>

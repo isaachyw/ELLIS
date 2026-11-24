@@ -8,11 +8,10 @@ surface_dD (rotated memory-Z, D rounds; ellis.noise.surface_memory).  One core u
 Tools (all but stim_bool / mask_bool write bit-packed output):
   stim       pip stim: compile_detector_sampler().sample(bit_packed=True), Stim's Python API (ignores loss)
   stim_bool  the same with bool output, Stim's default
-  stim_cpp   stim::FrameSimulator compiled into ellis._core, run in the same batched harness (ignores loss)
-  mask       MaskFrameSampler.sample_detectors: detection events and observables
-  mask_her   the same plus per-measurement heralds
-  mask_meas  MaskFrameSampler.sample: measurements and heralds
-  mask_bool  MaskFrameSampler.sample_detectors with bool output (compare with stim_bool)
+  stim_cpp   StimSampler.sample: stim::FrameSimulator in the same batched harness (ignores loss), measurements,
+             detection events and observables
+  mask       MaskFrameSampler.sample: measurements, detection events, observables and heralds
+  mask_bool  the same with bool output (compare with stim_bool)
 """
 import argparse
 import json
@@ -29,7 +28,7 @@ BB_CIRCUITS = Path(__file__).resolve().parent / "fixtures"
 
 CIRCUITS = ["bb72", "bb144", "surface_d11", "surface_d15", "surface_d21", "surface_d25", "surface_d31"]
 P_LOSS = [0.0, 1e-3, 5e-3]
-TOOLS = ["stim", "stim_bool", "stim_cpp", "mask", "mask_her", "mask_meas", "mask_bool"]
+TOOLS = ["stim", "stim_bool", "stim_cpp", "mask", "mask_bool"]
 MAX_OUTPUT_BYTES = 1.5e9
 
 
@@ -51,14 +50,11 @@ def sampler(tool, c, threads=1):
         return (lambda n: pip.sample(n, bit_packed=bit_packed, separate_observables=True)), (packed if bit_packed else D + O)
     if tool == "stim_cpp":
         harness = StimSampler(c, seed=1)
-        return (lambda n: harness.sample_detectors(n, bit_packed=True, threads=threads)), packed
+        return (lambda n: harness.sample(n, bit_packed=True, threads=threads)), packed + (M + 7) // 8
     s = MaskFrameSampler(c, seed=1)
-    if tool == "mask_meas":
-        return (lambda n: s.sample(n, bit_packed=True, threads=threads)), 2 * ((M + 7) // 8)
     if tool == "mask_bool":
-        return (lambda n: s.sample_detectors(n, threads=threads)), D + O
-    heralds = tool == "mask_her"
-    return (lambda n: s.sample_detectors(n, bit_packed=True, heralds=heralds, threads=threads)), packed + heralds * ((M + 7) // 8)
+        return (lambda n: s.sample(n, threads=threads)), D + O + 2 * M
+    return (lambda n: s.sample(n, bit_packed=True, threads=threads)), packed + 2 * ((M + 7) // 8)
 
 
 def timed(f, n0, budget, cap):
@@ -90,7 +86,7 @@ def measure(name, p_loss, tool, budget, threads=1):
         s = MaskFrameSampler(c, seed=2)
         row["batch"] = s.batch_size
         row["simd_width"] = s.simd_width
-        row["herald_rate"] = round(float(s.sample(20000)[1].any(1).mean()), 4)
+        row["herald_rate"] = round(float(s.sample(20000)[3].any(1).mean()), 4)
     return row
 
 
@@ -108,11 +104,11 @@ def summary(rows, thread_rows):
         for p in dict.fromkeys(r["p_loss"] for r in rows if r["circuit"] == name):
             rate = {r["tool"]: r for r in rows if r["circuit"] == name and r["p_loss"] == p and r["threads"] == 1}
             cells = [f"{rate[t]['shots_per_s']:,.0f}" if t in rate else "" for t in tools]
-            her = next((f"{rate[t]['herald_rate']:.1%}" for t in ("mask", "mask_her", "mask_meas") if t in rate), "")
+            her = next((f"{rate[t]['herald_rate']:.1%}" for t in ("mask", "mask_bool") if t in rate), "")
             out.append(f"| {name} | {p:g} | " + " | ".join(cells) +
                        f" | {ratio(rate, 'mask', 'stim_cpp')} | {ratio(rate, 'mask', 'stim')} | {her} |")
     if thread_rows:
-        out += ["", "Threads (detection events, bit-packed), shots/s:", ""]
+        out += ["", "Threads (bit-packed), shots/s:", ""]
         ts = sorted({r["threads"] for r in thread_rows})
         out.append("| circuit | p_loss | tool | " + " | ".join(map(str, ts)) + " |")
         out.append("|---" * (len(ts) + 3) + "|")
