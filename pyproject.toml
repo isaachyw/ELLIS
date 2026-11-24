@@ -55,7 +55,7 @@ skip = ["*-musllinux_*"]
 build-frontend = "build[uv]"
 test-requires = ["pytest", "pytest-xdist", "sinter>=1.15", "pymatching>=2.4"]
 test-sources = ["tests"]
-test-command = "pytest -n 4 -q tests/python"
+test-command = "pytest -n 4 -q --durations=8 tests/python"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
