@@ -91,7 +91,6 @@ b = ellis.compile_sampler(circuit, certificate=cert, seed=2)
 | Exception | When |
 | --- | --- |
 | `ValueError` | `circuit` uses an unsupported operation, or `method` is not one of the three values. |
-| `ImportError` | The route is Clifft and the `clifft` package is not installed. The message names the routing reason and the extra to install. |
 
 ## `ellis.Sampler`
 
@@ -138,17 +137,14 @@ Facts about `heralds`:
 
 `ellis._core.MaskFrameSampler` is a Pauli-frame simulator built on Stim's `FrameSimulator`. It keeps one alive bit per
 atom and shot, and every gate is masked by it. All shots share one reference record, the certified one when the route
-comes from `"auto"`. It simulates 256 shots per AVX2 word, in batches of up to 2048 shots, and runs Stim's
+comes from `"auto"`. It simulates 256 shots per AVX2 word (128 per SSE2 word, 64 on arm64), in batches of up to 2048 shots, and runs Stim's
 `STORE_EVERYTHING_TO_MEMORY` mode, so detectors are computed during the simulation.
 
 ### Clifft online
 
 The Clifft route uses `clifft.noncomp` 0.13.0 in `execution="online"` mode, which simulates each shot's own lossy
-circuit one shot at a time, so it needs no reference. It is an optional dependency:
-
-```bash
-uv sync --extra clifft         # or: pip install 'ellis[clifft]'
-```
+circuit one shot at a time, so it needs no reference. `ellis-qec` depends on `clifft>=0.13,<0.14`, so Clifft is
+installed with ELLIS.
 
 `ellis._clifft` translates the circuit before handing it to Clifft:
 
@@ -188,12 +184,19 @@ ellis._core.MaskFrameSampler(circuit, *, reference=None, seed=None, batch_size=0
 | --- | --- |
 | `reference` (argument) | The shared reference record, `num_measurements` bits. `None` uses Stim's reference sample of the circuit without loss markers and without Pauli gates. |
 | `batch_size` (argument) | Shots per batch, a power of two at least the SIMD width. 0 picks the largest batch, up to 2048, whose frame fits in 512 KB. |
-| `simd_width` (argument) | 256, 128, or 64. 0 picks the widest width compiled in. |
+| `simd_width` (argument) | A width in `ellis._core.SIMD_WIDTHS`: 256, 128 and 64 with AVX2, 128 and 64 with SSE2, 64 on arm64. 0 picks the widest. |
 | `sample(shots, *, bit_packed=False, threads=1)` | Returns `(measurements, detectors, observables, heralds)`. |
 | `batch_size` (property) | The batch size in use. |
 | `reference`, `num_qubits`, `num_measurements`, `num_detectors`, `num_observables`, `num_instructions`, `simd_width` | Read-only properties. |
 
 Results depend on `seed`, `batch_size`, and `simd_width`, and not on `threads`.
+
+`ellis._core` loads one build of the module: `ellis._core_avx2`, `ellis._core_sse2`, or `ellis._core_polyfill`. Each
+build is compiled with its own machine flags and its own copy of Stim, because Stim fixes its SIMD word width at compile
+time. `ellis._core.VARIANT` names the build that was loaded, which is the fastest installed build that this CPU runs.
+x86-64 wheels contain `avx2` and `sse2`, arm64 wheels contain `polyfill`, and a source build contains the best build for
+the machine that compiled it. To force a build, set `ELLIS_SIMD=avx2`, `sse2`, or `polyfill` before you import ELLIS.
+If that build is not installed or this CPU cannot run it, the import raises `ImportError`.
 
 ## Removed from main
 

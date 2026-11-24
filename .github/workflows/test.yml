@@ -1,0 +1,25 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      # Both x86-64 wheel variants, so the suite runs once on each (cmake/SimdVariants.cmake).
+      - run: uv sync --locked -C cmake.define.ELLIS_SIMD="avx2;sse2"
+      - run: uv run python -c "import ellis._core as c; print(c.VARIANT, c.SIMD_WIDTHS)"
+      - run: uv run pytest -n auto -q
+        env:
+          ELLIS_SIMD: avx2
+      - run: uv run pytest -n auto -q
+        env:
+          ELLIS_SIMD: sse2

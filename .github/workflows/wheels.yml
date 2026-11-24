@@ -1,0 +1,96 @@
+name: wheels
+
+# Builds the sdist and the wheels on every push and pull request.  A tag v* (and only a tag) publishes them:
+# TestPyPI first, then PyPI.  See RELEASING.md.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv build --sdist --out-dir dist
+      - run: tar tzf dist/*.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  wheels:
+    name: wheels ${{ matrix.python }} ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]  # clifft's arm64 wheels need macOS 15
+        python: [cp312, cp313, cp314]
+        include:
+          - os: ubuntu-latest
+            variants: avx2 sse2
+          - os: macos-15
+            variants: polyfill
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pypa/cibuildwheel@v4.3.5
+        env:
+          CIBW_BUILD: ${{ matrix.python }}-*
+      - name: Check the wheel's ellis._core variants
+        run: |
+          for whl in wheelhouse/*.whl; do
+            echo "$whl"
+            found=$(python3 -m zipfile -l "$whl" | grep -o 'ellis/_core_[a-z0-9]*' | sed 's|ellis/_core_||' | sort | tr '\n' ' ')
+            expected=$(echo ${{ matrix.variants }} | tr ' ' '\n' | sort | tr '\n' ' ')
+            echo "variants: $found"
+            [ "$found" = "$expected" ] || { echo "expected: $expected"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.python }}
+          path: wheelhouse/*.whl
+
+  testpypi:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [sdist, wheels]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ellis-qec
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check that the tag names the package version
+        run: ls dist && test -f "dist/ellis_qec-${GITHUB_REF_NAME#v}.tar.gz"
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true  # a rerun after a failed PyPI upload
+
+  pypi:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [testpypi]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ellis-qec
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logos/ellis-logo-light.png" width="220" alt="ELLIS logo">
+  <img src="https://raw.githubusercontent.com/isaachyw/ELLIS/main/docs/assets/logos/ellis-logo-light.png" width="220" alt="ELLIS logo">
 </p>
 
 # ELLIS: Extremely Fast Quantum Circuit Simulation under Qubit Loss and Leakage
@@ -45,21 +45,35 @@ R 1
 ## Sampling performance
 
 <p>
-  <img src="docs/assets/performance/sampling_single_core.png" width="49%" alt="Single-core sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
-  <img src="docs/assets/performance/sampling_multicore_128.png" width="49%" alt="128-thread sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
+  <img src="https://raw.githubusercontent.com/isaachyw/ELLIS/main/docs/assets/performance/sampling_single_core.png" width="49%" alt="Single-core sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
+  <img src="https://raw.githubusercontent.com/isaachyw/ELLIS/main/docs/assets/performance/sampling_multicore_128.png" width="49%" alt="128-thread sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
 </p>
 
 ## Install
 
 ```bash
+uv add ellis-qec             # or: pip install ellis-qec
+uv add "ellis-qec[sinter]"   # also sinter, for ellis.sinter
+```
+
+The distribution is `ellis-qec` and the import name is `ellis`. It installs Stim and Clifft with it. Wheels are
+available for CPython 3.12, 3.13, and 3.14 on Linux x86-64 (manylinux_2_28) and macOS arm64 (macOS 15 or later, as
+for Clifft). An x86-64 wheel contains two builds of the C++ core, one for CPUs with AVX2 and one for CPUs without it.
+`import ellis` loads the faster build that the CPU runs, and `ellis._core.VARIANT` names it.
+
+### Build from source
+
+```bash
 uv sync                  # builds ellis._core with CMake (fetches Stim 1.16.0 once)
-uv sync --extra clifft   # also Clifft, for circuits without a proven common reference
 uv sync --extra sinter   # also sinter, for ellis.sinter
 ```
 
-The build needs GCC 10 or newer and targets AVX2 by default. For a CPU without AVX2, run
-`uv sync -C cmake.define.SIMD_WIDTH=128`. On Perlmutter, CMake selects the `gcc-native` module's
-`g++` automatically. Run the first build on a compute node.
+The build needs a C++20 compiler: GCC 10 or newer, or Apple clang. A source build compiles one variant of the core,
+the best one for the machine that runs the build (AVX2, SSE2, or 64-bit words on arm64). To build both x86-64 wheel
+variants, run `uv sync -C cmake.define.ELLIS_SIMD="avx2;sse2"`. CMake caches this choice in `build/`. To build
+without network access, add `-C cmake.define.FETCHCONTENT_SOURCE_DIR_STIM=/path/to/Stim-1.16.0`. On Perlmutter,
+CMake selects the `gcc-native` module's `g++` automatically. On a shared cluster, run the first build and the tests on
+a compute node.
 
 ## Use
 
@@ -77,7 +91,7 @@ r = sampler.sample(10**6, bit_packed=True, threads=8)  # the same fields, bit-pa
 | `compile_sampler` route                                  | Sampler                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `method="auto"`, certificate proven without gauge Paulis | C++ masked frame with the certified reference                                        |
-| `method="auto"`, any other certificate                   | Clifft online (`uv sync --extra clifft`)                                             |
+| `method="auto"`, any other certificate                   | Clifft online                                                                        |
 | `method="frame"`                                         | C++ masked frame; Stim's reference (unverified) unless a proven certificate is given |
 | `method="clifft"`                                        | Clifft online                                                                        |
 
@@ -85,7 +99,7 @@ r = sampler.sample(10**6, bit_packed=True, threads=8)  # the same fields, bit-pa
 `certificate=` is given: sampling loses atoms only at the markers.
 `sample` returns a `SampleResult` with all four fields from one simulation pass; `bit_packed=True` uses Stim's
 layout. Detection events are relative to the noiseless reference sample, as in Stim.
-[docs/sampling.md](docs/sampling.md) is the full reference: supported operations, loss semantics, routing, result
+[docs/sampling.md](https://github.com/isaachyw/ELLIS/blob/main/docs/sampling.md) is the full reference: supported operations, loss semantics, routing, result
 layout, heralds, and performance.
 
 The sinter adapter `ellis.sinter` is under development.
@@ -95,19 +109,24 @@ The sinter adapter `ellis.sinter` is under development.
 | Path                     | Contents                                                                                                                                                                      |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/ellis/frame/`       | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler                                                                               |
-| `src/python/bindings.cc` | the `ellis._core` module                                                                                                                                                      |
+| `src/python/`            | `bindings.cc` (the `ellis._core_<variant>` modules), `cpu.cc` (`ellis._cpu`, which picks the variant)                                                                         |
 | `src/python/ellis/`      | `sampler` (`compile_sampler`), `_clifft` (Clifft route), `frame` (loss semantics), `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact` |
 | `tests/python/`          | tests against Stim on explicit lossy circuits and between the frame and Clifft routes; fixtures in `tests/fixtures/`                                                          |
 | `tools/`                 | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters                                            |
-| `cmake/`                 | Stim fetch, compiler selection, SIMD flags                                                                                                                                    |
+| `cmake/`                 | Stim fetch, compiler selection, SIMD variants                                                                                                                                 |
+| `.github/workflows/`     | `test.yml` (the tests on both x86-64 variants), `wheels.yml` (sdist and wheels; publishes to TestPyPI and PyPI on a `v*` tag, see `RELEASING.md`)                             |
 
 ## Test
 
 ```bash
-uv run pytest
+uv run pytest -n 8
 uv run python -m ellis.check_exact 'tests/fixtures/lightstim/*.stim'   # sampler vs Stim on random loss patterns
 uv run python tools/classify_lightstim.py --benchmark                  # paper App. C classification
 ```
+
+## License
+
+Apache-2.0. ELLIS includes [Stim](https://github.com/quantumlib/Stim), which is also Apache-2.0.
 
 ## Citation
 
