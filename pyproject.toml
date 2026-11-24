@@ -8,9 +8,10 @@ dependencies = ["numpy>=2.2", "stim>=1.16"]
 
 [project.optional-dependencies]
 sinter = ["sinter>=1.15"]
+clifft = ["clifft==0.13.0"]
 
 [dependency-groups]
-dev = ["pytest", "ruff", "ty", "sinter>=1.15", "pymatching>=2.4"]
+dev = ["pytest", "ruff", "ty", "sinter>=1.15", "pymatching>=2.4", "clifft==0.13.0"]
 
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]

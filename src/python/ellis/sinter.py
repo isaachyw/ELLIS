@@ -1,24 +1,34 @@
-"""sinter integration: sample with the C++ masked frame (ellis._core), decode with any sinter decoder.
+"""sinter integration: sample with ellis.compile_sampler, decode with any sinter decoder.
 
     import sinter
     from ellis.sinter import masked
     stats = sinter.collect(num_workers=128, tasks=tasks, decoders=["relay-bp"], max_shots=10**7, max_errors=1000,
                            custom_decoders={"relay-bp": masked(SinterDecoder_RelayBP(...))})
 
-`masked(decoder)` is a sinter.Sampler: each sinter worker process compiles a MaskFrameSampler for the task circuit
-(loss instructions `I_ERROR[loss](p)` included) and the decoder for the task's detector error model, which Stim builds
-without loss (loss-unaware decoding).  Everything else is sinter's own StimThenDecodeSampler: postselection, discards,
-error classification.  Extra custom counts: `shots_with_loss` (shots with at least one heralded readout).
+`masked(decoder)` is a sinter.Sampler: each sinter worker process compiles ellis.compile_sampler(task.circuit) (loss
+instructions `I_ERROR[loss](p)` included; the C++ masked frame when certify proves one reference exact, else Clifft)
+and the decoder for the task's detector error model, which Stim builds without loss (loss-unaware decoding).  Each
+worker certifies each task's circuit once, however many times sinter recompiles the task.  Everything else is
+sinter's own StimThenDecodeSampler: postselection, discards, error classification.  Extra custom counts:
+`shots_with_loss` (shots with at least one heralded readout).
 """
 import collections
+import functools
 import pathlib
 import time
 
 import numpy as np
 import sinter
+import stim
 from sinter._decoding._stim_then_decode_sampler import _compile_decoder_with_disk_fallback, classify_discards_and_errors
 
-from ellis._core import MaskFrameSampler
+from ellis.certify import Certificate, certify
+from ellis.sampler import compile_sampler
+
+
+@functools.cache
+def _certificate(circuit_text: str) -> Certificate:
+    return certify(stim.Circuit(circuit_text))
 
 
 class MaskedFrameThenDecodeSampler(sinter.Sampler):
@@ -34,12 +44,13 @@ class _CompiledMaskedFrameThenDecodeSampler(sinter.CompiledSampler):
     def __init__(self, decoder: sinter.Decoder, task: sinter.Task, tmp_dir: pathlib.Path | None):
         self.task = task
         self.compiled_decoder = _compile_decoder_with_disk_fallback(decoder, task, tmp_dir)
-        self.sampler = MaskFrameSampler(task.circuit)       # seeded from the OS, one per worker
+        self.sampler = compile_sampler(task.circuit, certificate=_certificate(str(task.circuit)))  # seeded from the OS
         self.num_obs = task.circuit.num_observables
 
     def sample(self, suggested_shots: int) -> sinter.AnonTaskStats:
         t0 = time.monotonic()
-        dets, actual_obs, heralds = self.sampler.sample_detectors(suggested_shots, bit_packed=True, heralds=True)
+        r = self.sampler.sample_detectors(suggested_shots, bit_packed=True, heralds=True)
+        dets, actual_obs, heralds = r.detectors, r.observables, r.heralds
         num_shots = dets.shape[0]
         custom_counts = collections.Counter({"shots_with_loss": int(np.count_nonzero(heralds.any(axis=1)))})
         num_discards_1 = 0
