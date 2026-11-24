@@ -6,7 +6,7 @@
 
 [![arXiv](https://img.shields.io/badge/Paper-2611.26173-B31B1B?style=flat-square)](https://arxiv.org/abs/2611.26173)
 
-ELLIS (Efficient Loss and Leakage Invariant-reference Simulation) samples Clifford circuits with atom loss
+ELLIS (Efficient Loss and Leakage Invariant-reference Simulation) samples Clifford circuits with qubit loss and leakage
 exactly. It uses a masked Pauli frame and one shared reference record, so each shot does not need its own
 tableau reference.
 
@@ -25,9 +25,9 @@ tableau reference.
 
 ELLIS reads Stim circuits and adds two tagged `I_ERROR` instructions. Stim parses both and ignores them.
 
-| Instruction | Meaning |
-|---|---|
-| `I_ERROR[loss](p) q...` | Each atom `q` is lost with probability `p`. Its later gates are dropped and its readouts become fair coins. |
+| Instruction                 | Meaning                                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `I_ERROR[loss](p) q...`   | Each atom `q` is lost with probability `p`. Its later gates are dropped and its readouts become fair coins.   |
 | `I_ERROR[reload](p) q...` | Each empty slot `q` gets a fresh atom in \|0> with probability `p` (default 1). A present atom is left alone. |
 
 A reload happens only where its marker stands. To reload at a reset, write the marker just before it:
@@ -46,11 +46,6 @@ R 1
   <img src="docs/assets/performance/sampling_single_core.png" width="49%" alt="Single-core sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
   <img src="docs/assets/performance/sampling_multicore_128.png" width="49%" alt="128-thread sampling throughput for PPVM, Clifft online, and ELLIS on BB144 memory and the distance-7 transversal CNOT with atom loss.">
 </p>
-
-Sampling throughput on BB144 memory and the distance-7 surface-code transversal CNOT, on one core (left) and
-128 threads (right), with loss probability 10<sup>-3</sup> per two-qubit-gate operand, circuit-level
-depolarizing noise 10<sup>-3</sup>, no reload, and packed outputs. Bars show the median of five batches;
-error bars span the minimum and maximum.
 
 ## Install
 
@@ -82,14 +77,14 @@ sinter decoder.
 
 ## Layout
 
-| Path | Contents |
-|---|---|
-| `src/ellis/frame/` | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler |
-| `src/python/bindings.cc` | the `ellis._core` module |
-| `src/python/ellis/` | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact` |
-| `tests/python/` | tests against Stim on explicit lossy circuits; fixtures in `tests/fixtures/` |
-| `tools/` | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters |
-| `cmake/` | Stim fetch, compiler selection, SIMD flags |
+| Path                       | Contents                                                                                                                               |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/ellis/frame/`       | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler                                      |
+| `src/python/bindings.cc` | the `ellis._core` module                                                                                                             |
+| `src/python/ellis/`      | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact`                  |
+| `tests/python/`          | tests against Stim on explicit lossy circuits; fixtures in `tests/fixtures/`                                                         |
+| `tools/`                 | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters |
+| `cmake/`                 | Stim fetch, compiler selection, SIMD flags                                                                                             |
 
 ## Test
 
