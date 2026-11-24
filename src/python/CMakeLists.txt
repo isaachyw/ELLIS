@@ -11,3 +11,6 @@ endforeach()
 
 pybind11_add_module(_cpu MODULE cpu.cc)
 install(TARGETS _cpu LIBRARY DESTINATION ellis)
+
+# Every module contains a compiled copy of Stim (Apache-2.0), so the wheel carries its license.
+install(FILES ${stim_SOURCE_DIR}/LICENSE DESTINATION ellis/licenses RENAME Stim-LICENSE)

@@ -41,6 +41,7 @@ jobs:
             variants: polyfill
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3  # cibuildwheel's build[uv] frontend runs uv on the macOS host
       - uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_BUILD: ${{ matrix.python }}-*

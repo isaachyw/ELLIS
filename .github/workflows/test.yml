@@ -14,12 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.3  # setup-uv publishes no major-version tags
-      # Both x86-64 wheel variants, so the suite runs once on each (cmake/SimdVariants.cmake).
+      # Both x86-64 wheel variants, so the suite runs once on each (cmake/SimdVariants.cmake).  --no-sync: a
+      # plain `uv run` would rebuild with the default settings, i.e. only the native variant.
       - run: uv sync --locked -C cmake.define.ELLIS_SIMD="avx2;sse2"
-      - run: uv run python -c "import ellis._core as c; print(c.VARIANT, c.SIMD_WIDTHS)"
-      - run: uv run pytest -n auto -q
+      - run: uv run --no-sync python -c "import ellis._core as c; print(c.VARIANT, c.SIMD_WIDTHS)"
+      - run: uv run --no-sync pytest -n auto -q
         env:
           ELLIS_SIMD: avx2
-      - run: uv run pytest -n auto -q
+      - run: uv run --no-sync pytest -n auto -q
         env:
           ELLIS_SIMD: sse2

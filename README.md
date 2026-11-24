@@ -70,7 +70,8 @@ uv sync --extra sinter   # also sinter, for ellis.sinter
 
 The build needs a C++20 compiler: GCC 10 or newer, or Apple clang. A source build compiles one variant of the core,
 the best one for the machine that runs the build (AVX2, SSE2, or 64-bit words on arm64). To build both x86-64 wheel
-variants, run `uv sync -C cmake.define.ELLIS_SIMD="avx2;sse2"`. CMake caches this choice in `build/`. To build
+variants, run `uv sync -C cmake.define.ELLIS_SIMD="avx2;sse2"`, and then use `uv run --no-sync`, because a plain
+`uv run` rebuilds with the default settings. To build
 without network access, add `-C cmake.define.FETCHCONTENT_SOURCE_DIR_STIM=/path/to/Stim-1.16.0`. On Perlmutter,
 CMake selects the `gcc-native` module's `g++` automatically. On a shared cluster, run the first build and the tests on
 a compute node.
