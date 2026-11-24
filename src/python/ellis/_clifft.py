@@ -8,6 +8,7 @@ markers do.  Clifft reports raw detector parities; ELLIS reports them relative t
 """
 import numpy as np
 import stim
+from clifft import noncomp
 
 from ellis import frame as mf
 
@@ -47,8 +48,6 @@ def _bits(a: np.ndarray, bit_packed: bool) -> np.ndarray:
 
 class Backend:
     def __init__(self, circuit: stim.Circuit, seed: int | None):
-        from clifft import noncomp
-
         text, transitions = translate(circuit)
         model = noncomp.Model(classifier=noncomp.Classifier(CLASSIFIER), transitions=transitions, reset_restores_lost=False)
         self.program = noncomp.compile(text, model, execution="online")  # fixed execution rejects named transitions

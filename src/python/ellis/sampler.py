@@ -5,7 +5,7 @@
 
 When ellis.certify proves that one reference record is exact for every loss pattern, the circuit samples with the C++
 masked frame (ellis._core.MaskFrameSampler) and that reference.  Otherwise it samples with Clifft's noncomputational
-sampler in online mode (ellis._clifft, the optional `clifft` extra), which simulates each shot's own lossy circuit.
+sampler in online mode (ellis._clifft), which simulates each shot's own lossy circuit.
 Both use gate-drop loss semantics; see ellis.frame.
 """
 from dataclasses import dataclass
@@ -85,8 +85,7 @@ def compile_sampler(circuit: stim.Circuit, *, method: Literal["auto", "frame", "
     method="frame" skips certify and uses a proven certificate's reference if given, else Stim's reference of the
     loss-free circuit, which is unverified (for speed comparisons).  method="clifft" always samples with Clifft.
     seed: seed of the sampler's random stream (None: from the OS); each sample call continues it.
-    Raises ValueError for an operation outside Clifford gates, Pauli noise, resets and single-qubit measurements, and
-    ImportError when the circuit needs Clifft and it is not installed."""
+    Raises ValueError for an operation outside Clifford gates, Pauli noise, resets and single-qubit measurements."""
     if method not in ("auto", *_BACKENDS):
         raise ValueError(f"method must be 'auto', 'frame' or 'clifft', not {method!r}")
     circuit = circuit.flattened()
@@ -97,11 +96,4 @@ def compile_sampler(circuit: stim.Circuit, *, method: Literal["auto", "frame", "
         method, reason = route(certificate)
     else:
         reason = f"method={method!r} requested"
-    try:
-        backend = _BACKENDS[method](circuit, certificate, seed)
-    except ModuleNotFoundError as e:
-        if e.name != "clifft":
-            raise
-        raise ImportError(f"this circuit samples with Clifft ({reason}), which is not installed: "
-                          "pip install 'ellis[clifft]'") from e
-    return Sampler(circuit, method, reason, certificate, backend)
+    return Sampler(circuit, method, reason, certificate, _BACKENDS[method](circuit, certificate, seed))

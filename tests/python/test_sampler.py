@@ -1,7 +1,5 @@
 """ellis.compile_sampler: routing by certificate, result layout on both routes, and the C++ masked frame and Clifft
 sampling the same distributions (exactly with deterministic loss, statistically with random loss and noise)."""
-import sys
-
 import frame_oracle as fo
 import numpy as np
 import pytest
@@ -15,8 +13,6 @@ from test_frame import close, random_circuit, random_losses
 import ellis
 from ellis import _clifft
 from ellis import frame as mf
-
-pytest.importorskip("clifft")
 
 METHODS = ["frame", "clifft"]
 # Contextual: no single reference fits every loss pattern of its markers (test_certify's contradiction circuit).
@@ -53,13 +49,6 @@ def test_explicit_methods_skip_certify():
 def test_rejects_non_clifford_operations(method, text):
     with pytest.raises(ValueError):
         ellis.compile_sampler(stim.Circuit(text), method=method)
-
-
-def test_missing_clifft_names_the_verdict(monkeypatch):
-    monkeypatch.setitem(sys.modules, "clifft", None)
-    with pytest.raises(ImportError, match="contextual.*ellis\\[clifft\\]"):
-        ellis.compile_sampler(CONTEXTUAL)
-    assert ellis.compile_sampler(surface_memory(3, 3, 1e-3, 1e-2)).method == "frame"
 
 
 def test_auto_certifies_only_the_marked_losses():

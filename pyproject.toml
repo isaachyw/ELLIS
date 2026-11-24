@@ -1,20 +1,40 @@
 [project]
-name = "ellis"
+name = "ellis-qec"
 version = "0.1.0"
 description = "ELLIS: Efficient Loss and Leakage Invariant-reference Simulation. Exact masked Pauli-frame sampling of Clifford circuits with atom loss, and common-reference certificates."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Yuewen Hou" }, { name = "Gokul Subramanian Ravi" }]
+keywords = ["quantum error correction", "stabilizer simulation", "atom loss", "leakage", "stim", "neutral atoms"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 requires-python = ">=3.12"
-dependencies = ["numpy>=2.2", "stim>=1.16"]
+dependencies = ["numpy>=2.2", "stim>=1.16,<2", "clifft>=0.13,<0.14"]
 
 [project.optional-dependencies]
-sinter = ["sinter>=1.15"]
-clifft = ["clifft==0.13.0"]
+sinter = ["sinter>=1.15,<2"]
+
+[project.urls]
+Repository = "https://github.com/isaachyw/ELLIS"
+Documentation = "https://github.com/isaachyw/ELLIS/blob/main/docs/sampling.md"
+Paper = "https://arxiv.org/abs/2611.26173"
 
 [dependency-groups]
-dev = ["pytest", "ruff", "ty", "sinter>=1.15", "pymatching>=2.4", "clifft==0.13.0"]
+dev = ["pytest", "pytest-xdist", "ruff", "ty", "sinter>=1.15", "pymatching>=2.4"]
 
 [build-system]
-requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
+requires = ["scikit-build-core>=0.11", "pybind11>=2.13"]
 build-backend = "scikit_build_core.build"
 
 [tool.scikit-build]
@@ -24,6 +44,26 @@ wheel.packages = ["src/python/ellis"]
 cmake.build-type = "Release"
 # A login node gives a user 32 cores and 30 GB, and ninja would start one compiler per core.
 build.tool-args = ["-j8"]
+# The sdist keeps sources, tests and docs/sampling.md; README images load from GitHub.
+sdist.exclude = [".audit", ".github", ".pytest_cache", ".python-version", "docs/assets", "tools", "uv.lock"]
+
+# Wheels: GitHub Actions (.github/workflows/wheels.yml).  x86-64 wheels carry the avx2 and sse2 variants of
+# ellis._core, arm64 wheels the polyfill one (cmake/SimdVariants.cmake).
+[tool.cibuildwheel]
+build = ["cp312-*", "cp313-*", "cp314-*"]
+build-frontend = "build[uv]"
+test-requires = ["pytest", "pytest-xdist", "sinter>=1.15", "pymatching>=2.4"]
+test-sources = ["tests"]
+test-command = "pytest -n 4 -q tests/python"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_28"
+config-settings = { "cmake.define.ELLIS_SIMD" = "avx2;sse2" }
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+config-settings = { "cmake.define.ELLIS_SIMD" = "polyfill" }
 
 [tool.uv]
 # Rebuild the extension on `uv sync` / `uv run` when its sources change.
