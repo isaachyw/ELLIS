@@ -129,23 +129,11 @@ bool classify(const stim::CircuitInstruction &inst, Kind &kind) {
 
 }  // namespace
 
-Program compile(const stim::Circuit &circuit, const uint8_t *reference, const ForcedLosses &forced_losses) {
+Program compile(const stim::Circuit &circuit, const uint8_t *reference) {
     Program prog;
     prog.circuit = circuit.flattened();
     prog.stats = prog.circuit.compute_stats();
-    prog.forced_losses = forced_losses;
     const auto &ops = prog.circuit.operations;
-    for (const auto &[k, qubits] : forced_losses) {
-        if (k < -1 || k >= (int64_t)ops.size()) {
-            throw std::invalid_argument("forced loss after instruction " + std::to_string(k) +
-                                        ", but the flattened circuit has " + std::to_string(ops.size()) + " instructions");
-        }
-        for (uint32_t q : qubits) {
-            if (q >= prog.stats.num_qubits) {
-                throw std::invalid_argument("forced loss of qubit " + std::to_string(q) + ", outside the circuit");
-            }
-        }
-    }
 
     // Validate, classify, and remember which measurements each detector / observable reads.
     std::vector<std::vector<uint64_t>> detector_records, observable_records(prog.stats.num_observables);

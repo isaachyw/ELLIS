@@ -66,19 +66,10 @@ struct MaskFrameSampler {
     maskframe::Program prog;
     Config config;
 
-    MaskFrameSampler(const py::object &circuit, const py::object &reference,
-                     const py::object &forced_losses, const py::object &seed, size_t batch_size, size_t simd_width)
+    MaskFrameSampler(const py::object &circuit, const py::object &reference, const py::object &seed, size_t batch_size,
+                     size_t simd_width)
         : config(batch_size, simd_width, seed) {
         const stim::Circuit parsed(py::str(circuit).cast<std::string>());
-        maskframe::ForcedLosses losses;
-        if (!forced_losses.is_none()) {
-            for (const auto &[k, qubits] : forced_losses.cast<py::dict>()) {
-                auto &dst = losses[k.cast<int64_t>()];
-                for (const auto &q : qubits) {
-                    dst.push_back(q.cast<uint32_t>());
-                }
-            }
-        }
         py::array_t<uint8_t, py::array::c_style | py::array::forcecast> ref;
         if (!reference.is_none()) {
             ref = py::array_t<uint8_t, py::array::c_style | py::array::forcecast>::ensure(reference);
@@ -88,12 +79,11 @@ struct MaskFrameSampler {
                     std::to_string(parsed.count_measurements()) + ")");
             }
         }
-        prog = maskframe::compile(parsed, reference.is_none() ? nullptr : ref.data(), losses);
+        prog = maskframe::compile(parsed, reference.is_none() ? nullptr : ref.data());
     }
 
-    size_t batch(bool detector_mode, bool heralds) const {
-        return config.batch_size ? config.batch_size
-                                 : maskframe::default_batch_size(prog, detector_mode, heralds, config.simd_width);
+    size_t batch() const {
+        return config.batch_size ? config.batch_size : maskframe::default_batch_size(prog, config.simd_width);
     }
 
     py::object sample(size_t shots, bool bit_packed, bool heralds, unsigned threads) {
@@ -101,10 +91,9 @@ struct MaskFrameSampler {
         py::array her = bit_array(heralds ? shots : 0, prog.stats.num_measurements, bit_packed);
         maskframe::Output out{data(meas), nullptr, heralds ? data(her) : nullptr, bit_packed};
         const uint64_t seed = config.next_seed();
-        const size_t b = batch(false, heralds);
         {
             py::gil_scoped_release release;
-            maskframe::sample(prog, shots, b, config.simd_width, threads, seed, false, out);
+            maskframe::sample(prog, shots, batch(), config.simd_width, threads, seed, false, out);
         }
         if (heralds) {
             return py::make_tuple(meas, her);
@@ -118,10 +107,9 @@ struct MaskFrameSampler {
         py::array her = bit_array(heralds ? shots : 0, prog.stats.num_measurements, bit_packed);
         maskframe::Output out{data(dets), data(obs), heralds ? data(her) : nullptr, bit_packed};
         const uint64_t seed = config.next_seed();
-        const size_t b = batch(true, heralds);
         {
             py::gil_scoped_release release;
-            maskframe::sample(prog, shots, b, config.simd_width, threads, seed, true, out);
+            maskframe::sample(prog, shots, batch(), config.simd_width, threads, seed, true, out);
         }
         if (heralds) {
             return py::make_tuple(dets, obs, her);
@@ -201,16 +189,12 @@ Args:
     circuit: a stim.Circuit or its text.
     reference: reference record (one bool per measurement).  Default: Stim's reference sample of
         the circuit without loss instructions and without Pauli gates (they live in the frame).
-    forced_losses: {k: [qubits]} lost in every shot right after instruction k of
-        circuit.flattened() (k = -1: lost from the start), in addition to random loss.
     seed: seed of the sampler's random stream (None: from the OS).  Each sample call continues it.
     batch_size: shots simulated together per thread (a power of two >= the SIMD width); 0 = automatic.
     simd_width: 64, 128 or 256 bits; 0 = the widest compiled in.
 )DOC")
-        .def(py::init<const py::object &, const py::object &, const py::object &, const py::object &, size_t,
-                      size_t>(),
-             "circuit"_a, py::kw_only(), "reference"_a = py::none(), "forced_losses"_a = py::none(),
-             "seed"_a = py::none(), "batch_size"_a = 0, "simd_width"_a = 0)
+        .def(py::init<const py::object &, const py::object &, const py::object &, size_t, size_t>(), "circuit"_a,
+             py::kw_only(), "reference"_a = py::none(), "seed"_a = py::none(), "batch_size"_a = 0, "simd_width"_a = 0)
         .def("sample", &MaskFrameSampler::sample, "shots"_a, py::kw_only(), "bit_packed"_a = false,
              "heralds"_a = true, "threads"_a = 1,
              R"DOC(Samples measurement records.
@@ -231,11 +215,7 @@ heralds are per measurement as in sample().)DOC")
         .def_property_readonly("num_observables", [](const MaskFrameSampler &s) { return s.prog.stats.num_observables; })
         .def_property_readonly("num_instructions", [](const MaskFrameSampler &s) { return s.prog.circuit.operations.size(); })
         .def_property_readonly("simd_width", [](const MaskFrameSampler &s) { return s.config.simd_width; })
-        .def(
-            "batch_size",
-            [](const MaskFrameSampler &s, bool detectors, bool heralds) { return s.batch(detectors, heralds); },
-            py::kw_only(), "detectors"_a = false, "heralds"_a = true,
-            "The batch size used by sample (detectors=False) or sample_detectors (detectors=True).");
+        .def_property_readonly("batch_size", &MaskFrameSampler::batch, "Shots simulated together per thread.");
 
     py::class_<StimSampler>(m, "StimSampler", R"DOC(
 Stim's own stim::FrameSimulator (ignores loss, no masks), compiled into this module with the same flags

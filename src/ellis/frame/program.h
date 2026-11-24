@@ -3,7 +3,6 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
 #include <vector>
 
 #include "stim/circuit/circuit.h"
@@ -24,13 +23,10 @@ enum class Kind : uint8_t {
     RELOAD,           // I_ERROR[reload](p): each empty target slot gets a fresh atom in |0> with probability p (default 1)
 };
 
-using ForcedLosses = std::map<int64_t, std::vector<uint32_t>>;
-
 struct Program {
-    stim::Circuit circuit;           // flattened (forced-loss indices refer to its instructions)
+    stim::Circuit circuit;           // flattened
     stim::CircuitStats stats;
     std::vector<Kind> kinds;         // one per instruction of `circuit`
-    ForcedLosses forced_losses;      // qubits lost in every shot right after instruction k (k = -1: from the start)
     std::vector<uint8_t> reference;  // the reference record (0/1 per measurement)
     std::vector<uint8_t> detector_flip;    // XORed into detectors / observables, so that detection events keep
     std::vector<uint8_t> observable_flip;  // Stim's convention (relative to Stim's own reference sample)
@@ -38,6 +34,6 @@ struct Program {
 
 /// Flattens and validates `circuit`.  `reference` (num_measurements bytes, or null) overrides the default
 /// reference: Stim's reference sample of the circuit without loss instructions and without Pauli gates.
-Program compile(const stim::Circuit &circuit, const uint8_t *reference, const ForcedLosses &forced_losses);
+Program compile(const stim::Circuit &circuit, const uint8_t *reference);
 
 }  // namespace maskframe

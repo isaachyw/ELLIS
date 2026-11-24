@@ -60,19 +60,9 @@ struct MaskedFrameSimulator : stim::FrameSimulator<W> {
         this->reset_all();
         std::memset(alive_table.data.u8, 0xFF, alive_table.data.num_u8_padded());
         num_results = 0;
-        auto forced = prog.forced_losses.begin();
-        auto lose_forced = [&](int64_t k) {
-            for (; forced != prog.forced_losses.end() && forced->first == k; ++forced) {
-                for (uint32_t q : forced->second) {
-                    alive_table[q].clear();
-                }
-            }
-        };
-        lose_forced(-1);
         const auto &ops = prog.circuit.operations;
         for (size_t k = 0; k < ops.size(); k++) {
             execute(ops[k], prog.kinds[k]);
-            lose_forced((int64_t)k);
         }
     }
 

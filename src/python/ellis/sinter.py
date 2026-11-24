@@ -18,7 +18,7 @@ import numpy as np
 import sinter
 from sinter._decoding._stim_then_decode_sampler import _compile_decoder_with_disk_fallback, classify_discards_and_errors
 
-from ellis import frame as mf
+from ellis._core import MaskFrameSampler
 
 
 class MaskedFrameThenDecodeSampler(sinter.Sampler):
@@ -34,7 +34,7 @@ class _CompiledMaskedFrameThenDecodeSampler(sinter.CompiledSampler):
     def __init__(self, decoder: sinter.Decoder, task: sinter.Task, tmp_dir: pathlib.Path | None):
         self.task = task
         self.compiled_decoder = _compile_decoder_with_disk_fallback(decoder, task, tmp_dir)
-        self.sampler = mf.compile_sampler(task.circuit)       # seeded from the OS, one per worker
+        self.sampler = MaskFrameSampler(task.circuit)       # seeded from the OS, one per worker
         self.num_obs = task.circuit.num_observables
 
     def sample(self, suggested_shots: int) -> sinter.AnonTaskStats:

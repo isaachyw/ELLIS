@@ -1,4 +1,4 @@
-"""Exactness test: masked-frame sampler vs Stim on the explicit lossy circuit C_s.
+"""Exactness test: the C++ masked frame vs Stim on the explicit lossy circuit C_s.
 
 Noiseless Clifford outcome distributions are uniform over an affine subspace A = r + V of
 GF(2)^m, so two samplers agree exactly iff their samples span the same V and one sample of each
@@ -13,6 +13,7 @@ import numpy as np
 import stim
 
 from ellis import frame as mf
+from ellis._core import MaskFrameSampler
 from ellis.gf2 import Span, to_ints
 
 
@@ -28,15 +29,23 @@ def same_distribution(a, b):
     return va.dim == vb.dim == vj.dim and vj.reduce(A[0] ^ B[0]) == 0
 
 
+def mark_losses(circuit, losses):
+    """`circuit` flattened, with `I_ERROR[loss](1)` markers that lose losses[k] right after instruction k (k = -1:
+    from the start): the loss pattern of explicit_lossy_circuit(circuit, losses), in every shot."""
+    out = stim.Circuit()
+    if -1 in losses:
+        out.append("I_ERROR", losses[-1], [1.0], tag="loss")
+    for k, inst in enumerate(circuit.flattened()):
+        out.append(inst)
+        if k in losses:
+            out.append("I_ERROR", losses[k], [1.0], tag="loss")
+    return out
+
+
 def compare(circ, losses, seed):
     m = circ.num_measurements
     N = m + 64
-    forced = stim.Circuit()
-    for k, inst in enumerate(circ.flattened()):
-        forced.append(inst)
-        if k in losses:
-            forced.append("I_ERROR", losses[k], [1.0], tag="loss")
-    a, _ = mf.sample(forced, N, seed=seed, reference=None)
+    a = MaskFrameSampler(mark_losses(circ, losses), seed=seed).sample(N, heralds=False)
     b = mf.explicit_lossy_circuit(circ, losses).compile_sampler(seed=seed).sample(N)
     A, B = to_ints(a), to_ints(b)
     va, vb, vj = Span(), Span(), Span()

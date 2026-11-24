@@ -222,7 +222,7 @@ std::vector<size_t> simd_widths() {
     return out;
 }
 
-size_t default_batch_size(const Program &prog, bool detector_mode, bool heralds, size_t simd_width) {
+size_t default_batch_size(const Program &prog, size_t simd_width) {
     // The largest batch, up to 2048 shots, whose frame (x, z and alive rows) fits in a 512 KB L2: loss hits
     // and noise are random accesses into it, and records, detectors and heralds are streamed.  Measured on
     // EPYC 7763 for bb72, bb144 and surface codes d = 11..31 (best or within 5% of the best batch).
@@ -232,8 +232,6 @@ size_t default_batch_size(const Program &prog, bool detector_mode, bool heralds,
     while (batch > simd_width && frame_rows * batch / 8 > L2_BYTES) {
         batch >>= 1;
     }
-    (void)detector_mode;
-    (void)heralds;
     return std::max(batch, simd_width);
 }
 

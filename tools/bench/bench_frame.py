@@ -5,7 +5,7 @@ usage: python tools/bench/bench_frame.py run OUT.jsonl [--budget S] [--circuits 
        python tools/bench/bench_frame.py summary OUT.jsonl [THREADS.jsonl]    # markdown tables
 Circuits: bb72, bb144 (gross code [[144,12,12]], 12 rounds, from fixtures/; ellis.noise.noisy) and
 surface_dD (rotated memory-Z, D rounds; ellis.noise.surface_memory).  One core unless `threads`.
-Tools (all but stim_bool / mask_bool / numpy write bit-packed output):
+Tools (all but stim_bool / mask_bool write bit-packed output):
   stim       pip stim: compile_detector_sampler().sample(bit_packed=True), Stim's Python API (ignores loss)
   stim_bool  the same with bool output, Stim's default
   stim_cpp   stim::FrameSimulator compiled into ellis._core, run in the same batched harness (ignores loss)
@@ -13,7 +13,6 @@ Tools (all but stim_bool / mask_bool / numpy write bit-packed output):
   mask_her   the same plus per-measurement heralds
   mask_meas  MaskFrameSampler.sample: measurements and heralds
   mask_bool  MaskFrameSampler.sample_detectors with bool output (compare with stim_bool)
-  numpy      ellis.frame.sample, the numpy reference implementation (bool measurements and heralds)
 """
 import argparse
 import json
@@ -26,13 +25,11 @@ import stim
 from ellis._core import MaskFrameSampler, StimSampler
 from ellis.noise import P, noisy, surface_memory
 
-from ellis import frame as mf
-
 BB_CIRCUITS = Path(__file__).resolve().parent / "fixtures"
 
 CIRCUITS = ["bb72", "bb144", "surface_d11", "surface_d15", "surface_d21", "surface_d25", "surface_d31"]
 P_LOSS = [0.0, 1e-3, 5e-3]
-TOOLS = ["stim", "stim_bool", "stim_cpp", "mask", "mask_her", "mask_meas", "mask_bool", "numpy"]
+TOOLS = ["stim", "stim_bool", "stim_cpp", "mask", "mask_her", "mask_meas", "mask_bool"]
 MAX_OUTPUT_BYTES = 1.5e9
 
 
@@ -55,8 +52,6 @@ def sampler(tool, c, threads=1):
     if tool == "stim_cpp":
         harness = StimSampler(c, seed=1)
         return (lambda n: harness.sample_detectors(n, bit_packed=True, threads=threads)), packed
-    if tool == "numpy":
-        return (lambda n: mf.sample(c, n, seed=1)), 2 * M
     s = MaskFrameSampler(c, seed=1)
     if tool == "mask_meas":
         return (lambda n: s.sample(n, bit_packed=True, threads=threads)), 2 * ((M + 7) // 8)
@@ -85,7 +80,7 @@ def timed(f, n0, budget, cap):
 def measure(name, p_loss, tool, budget, threads=1):
     c = circuit(name, p_loss)
     f, bytes_per_shot = sampler(tool, c, threads)
-    n0 = max(64, int(3e5 / c.num_measurements)) if tool == "numpy" else max(4096, int(3e7 / c.num_measurements) * threads)
+    n0 = max(4096, int(3e7 / c.num_measurements) * threads)
     cap = MAX_OUTPUT_BYTES / bytes_per_shot
     n, dt = timed(f, int(min(n0, cap)), budget, cap)
     row = {"circuit": name, "p_loss": p_loss, "tool": tool, "threads": threads, "shots": n, "secs": round(dt, 3),
@@ -93,7 +88,7 @@ def measure(name, p_loss, tool, budget, threads=1):
            "detectors": c.num_detectors, "host": platform.node()}
     if tool.startswith("mask"):
         s = MaskFrameSampler(c, seed=2)
-        row["batch"] = s.batch_size(detectors=tool != "mask_meas", heralds=tool != "mask")
+        row["batch"] = s.batch_size
         row["simd_width"] = s.simd_width
         row["herald_rate"] = round(float(s.sample(20000)[1].any(1).mean()), 4)
     return row
@@ -149,8 +144,6 @@ def main():
             jobs = [(c, 1e-3, t, int(T)) for c in ("bb144", "surface_d25") for t in ("mask", "stim_cpp")
                     for T in a.threads.split(",") if int(T) <= (os.cpu_count() or 1)]
         for name, p, tool, threads in jobs:
-            if tool == "numpy" and (name == "surface_d31" or p == 0):
-                continue                                   # minutes per point; the ratio is clear from the others
             row = measure(name, p, tool, a.budget, threads)
             print(json.dumps(row), flush=True)
             f.write(json.dumps(row) + "\n")

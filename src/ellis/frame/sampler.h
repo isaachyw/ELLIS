@@ -22,7 +22,7 @@ struct Output {
 std::vector<size_t> simd_widths();
 
 /// The batch size used when none is given (see sampler.cc).
-size_t default_batch_size(const Program &prog, bool detector_mode, bool heralds, size_t simd_width);
+size_t default_batch_size(const Program &prog, size_t simd_width);
 
 /// Masked-frame samples of `prog`.  Results depend on (seed, batch, simd_width) but not on `threads`.
 void sample(const Program &prog, size_t shots, size_t batch, size_t simd_width, unsigned threads, uint64_t seed,

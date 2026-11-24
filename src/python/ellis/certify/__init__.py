@@ -58,7 +58,7 @@ class Certificate:
     verdict: str  # "proven", "contextual", "consistent_on_family" or "outside-assumptions"
     method: str  # "frame-css", "diagonal-blocks", "diagonal-blocks+gauge", "exact-search" or "scope"
     reference: np.ndarray | None = None
-    gauge: dict | None = None  # for frame.sample(gauge=...), with the "diagonal-blocks+gauge" method
+    gauge: dict | None = None  # "diagonal-blocks+gauge" only: masked frame Paulis, which the C++ engine does not apply
     witness: list | None = None  # [(loss pattern, [measurement indices of y], value)], sums to 0 = 1
     family_size: int = 0
     notes: list = field(default_factory=list)

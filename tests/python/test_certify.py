@@ -8,7 +8,8 @@ import pytest
 import stim
 from ellis.certify import (MARKED, PESSIMISTIC, LossModel, certify, check_reference, circuit_model, constraints,
                            frame_css, loss_family, loss_locations, loss_slots, representative_slots, search)
-from ellis.check_exact import same_distribution
+from ellis._core import MaskFrameSampler
+from ellis.check_exact import mark_losses, same_distribution
 from ellis.gf2 import Span, to_ints
 from ellis.noise import noisy
 
@@ -24,7 +25,7 @@ def parity(x):
 def pattern_space(circ, losses, seed, reference):
     """(V_s span, masked-frame sample a_s, exact Stim sample b_s) of the lossy circuit C_s."""
     n = circ.num_measurements + 64
-    a, _ = mf.sample(circ, n, seed=seed, forced_losses=losses, reference=reference, canonical=False)
+    a = MaskFrameSampler(mark_losses(circ, losses), reference=reference, seed=seed).sample(n, heralds=False)
     b = mf.explicit_lossy_circuit(circ, losses).compile_sampler(seed=seed).sample(n)
     A, B = to_ints(a), to_ints(b)
     V = Span()
@@ -170,14 +171,12 @@ def test_closed_diagonal_blocks():
     cert = certify(s4, LossModel())
     assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks")
     # a CZ triangle (odd cycle: not frame-CSS) applied twice is I, and S.S = Z leaves a Z on qubit 0:
-    # proven with a masked Z gauge, and the gauged sampler is exact (qubit 0 ends in |->)
+    # proven with a masked Z gauge
     c = stim.Circuit("RX 0 1 2\nCZ 0 1 1 2 0 2\nCZ 0 1 1 2 0 2\nS 0\nS 0\nMX 0 1 2")
     assert frame_css(c, LossModel()).verdict == "outside-assumptions"  # the prefix would end inside the fused CZ layer
     assert not frame_css(c, EVERY).proven  # a loss between the triangles' CZs
     cert = certify(c, EVERY)
     assert (cert.verdict, cert.method) == ("proven", "diagonal-blocks+gauge")
-    m, _ = mf.sample(c, 100, reference=cert.reference, gauge=cert.gauge)
-    assert (m == [1, 0, 0]).all()
     # a lone S is no closed block: not provable statically, and the exact search finds no contradiction
     cert = certify(stim.Circuit("RX 0 1\nCZ 0 1\nS 0\nCZ 0 1\nMX 0 1"))
     assert (cert.verdict, cert.method) == ("consistent_on_family", "exact-search")
@@ -235,7 +234,7 @@ def test_reload_markers(marker):
     assert any(k_marker in s for s in fam) == ("(" in marker)     # failures are tested where reloads can fail
     for i, s in enumerate(fam):
         n = late.num_measurements + 100
-        a, _ = mf.sample(always, n, seed=i, forced_losses=s, reference=rel.reference)
+        a = MaskFrameSampler(mark_losses(always, s), reference=rel.reference, seed=i).sample(n, heralds=False)
         b = mf.explicit_lossy_circuit(always, s).compile_sampler(seed=i).sample(n)
         assert same_distribution(a, b), s
 

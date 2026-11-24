@@ -168,7 +168,7 @@ Verdict = Literal["frame-css", "not-frame-css", "outside-assumptions"]
 @dataclass
 class FrameCSS:
     verdict: Verdict
-    reference: np.ndarray | None = None          # kappa, for frame.sample(reference=...), when frame-CSS
+    reference: np.ndarray | None = None          # kappa, the masked frame's reference, when frame-CSS
     prefix_end: int = -1                         # last instruction of the loss-free prefix
     segments: int = 0
     groups: int = 0

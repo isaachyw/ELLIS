@@ -15,7 +15,6 @@ class MaskFrameSampler:
         circuit: stim.Circuit | str,
         *,
         reference: npt.ArrayLike | None = None,
-        forced_losses: dict[int, list[int]] | None = None,
         seed: int | None = None,
         batch_size: int = 0,
         simd_width: int = 0,
@@ -26,7 +25,8 @@ class MaskFrameSampler:
         self, shots: int, *, bit_packed: bool = False, heralds: bool = False, threads: int = 1
     ) -> tuple[np.ndarray, ...]:
         """(detectors, observables), plus per-measurement heralds with heralds=True."""
-    def batch_size(self, *, detectors: bool = False, heralds: bool = True) -> int: ...
+    @property
+    def batch_size(self) -> int: ...
     @property
     def reference(self) -> np.ndarray: ...
     @property
