@@ -10,8 +10,10 @@ ELLIS (Efficient Loss and Leakage Invariant-reference Simulation) samples Cliffo
 exactly. It uses a masked Pauli frame and one shared reference record, so each shot does not need its own
 tableau reference.
 
-- **Masked frame sampler.** `ellis.frame` and the C++ engine `ellis._core.MaskFrameSampler`, built on
-  Stim's `FrameSimulator`. A lost qubit drops its later gates, and its readouts become fair coins.
+- **One sampling API.** `ellis.compile_sampler` certifies the circuit. When one reference is proven exact, it samples
+  with the C++ masked frame `ellis._core.MaskFrameSampler`, built on Stim's `FrameSimulator`. Otherwise it samples
+  with Clifft's noncomputational sampler in online mode. Both drop a lost qubit's later gates and read its
+  measurements as heralded fair coins.
 - **Common-reference certificates.** `ellis.certify` proves that one reference is exact for every loss
   pattern by frame-CSS relabelling or closed S/CZ blocks, or returns a signed-parity contradiction that
   shows no such reference exists. Pass the circuit with its noise injected: losses and reloads happen at its
@@ -51,6 +53,7 @@ R 1
 
 ```bash
 uv sync                  # builds ellis._core with CMake (fetches Stim 1.16.0 once)
+uv sync --extra clifft   # also Clifft, for circuits without a proven common reference
 uv sync --extra sinter   # also sinter, for ellis.sinter
 ```
 
@@ -61,30 +64,40 @@ The build needs GCC 10 or newer and targets AVX2 by default. For a CPU without A
 ## Use
 
 ```python
-import stim
-from ellis import frame
-from ellis.certify import certify
+import ellis
 from ellis.noise import surface_memory
 
 circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)  # I_ERROR[loss](p) marks loss sites
-cert = certify(circuit)  # losses at the circuit's I_ERROR[loss] markers; verdict "proven", method "frame-css"
-sampler = frame.compile_sampler(circuit, reference=cert.reference, seed=1)
-dets, obs = sampler.sample_detectors(10**6, bit_packed=True, threads=8)
+sampler = ellis.compile_sampler(circuit, seed=1)  # certifies: verdict "proven", method "frame-css"
+sampler.method                                    # "frame"
+r = sampler.sample(10**4)                         # r.measurements, r.detectors, r.observables, r.heralds
+r = sampler.sample_detectors(10**6, bit_packed=True, threads=8)  # detectors and observables only
 ```
 
-`ellis.sinter.masked(decoder)` is a `sinter.Sampler`. It samples with the masked frame and decodes with any
+| `compile_sampler` route                                  | Sampler                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `method="auto"`, certificate proven without gauge Paulis | C++ masked frame with the certified reference                                        |
+| `method="auto"`, any other certificate                   | Clifft online (`uv sync --extra clifft`)                                             |
+| `method="frame"`                                         | C++ masked frame; Stim's reference (unverified) unless a proven certificate is given |
+| `method="clifft"`                                        | Clifft online                                                                        |
+
+`method="auto"` certifies with `ellis.certify.certify(circuit, **certify_options)` unless `certificate=` is given.
+Results are `SampleResult`s; `bit_packed=True` uses Stim's layout. Detection events are relative to the noiseless
+reference sample, as in Stim.
+
+`ellis.sinter.masked(decoder)` is a `sinter.Sampler`. It samples with `ellis.compile_sampler` and decodes with any
 sinter decoder.
 
 ## Layout
 
-| Path                       | Contents                                                                                                                               |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ellis/frame/`       | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler                                      |
-| `src/python/bindings.cc` | the `ellis._core` module                                                                                                             |
-| `src/python/ellis/`      | `frame`, `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact`                  |
-| `tests/python/`          | tests against Stim on explicit lossy circuits; fixtures in `tests/fixtures/`                                                         |
-| `tools/`                 | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters |
-| `cmake/`                 | Stim fetch, compiler selection, SIMD flags                                                                                             |
+| Path                     | Contents                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/ellis/frame/`       | C++ masked frame: program compilation, `stim::FrameSimulator` with alive masks, batched sampler                                                                               |
+| `src/python/bindings.cc` | the `ellis._core` module                                                                                                                                                      |
+| `src/python/ellis/`      | `sampler` (`compile_sampler`), `_clifft` (Clifft route), `frame` (loss semantics), `certify/` (`frame_css`, `blocks`, `constraints`), `noise`, `sinter`, `gf2`, `check_exact` |
+| `tests/python/`          | tests against Stim on explicit lossy circuits and between the frame and Clifft routes; fixtures in `tests/fixtures/`                                                          |
+| `tools/`                 | `bench/bench_frame.py` (masked frame and Stim speed), `classify_lightstim.py` (certify each LightStim protocol), fixture exporters                                            |
+| `cmake/`                 | Stim fetch, compiler selection, SIMD flags                                                                                                                                    |
 
 ## Test
 
