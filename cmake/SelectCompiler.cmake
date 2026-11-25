@@ -1,6 +1,5 @@
-# CMake uses $CXX or else `c++`; on Perlmutter both mean the system GCC 7 (uv's build frontend sets
-# CXX=c++), which has no C++20.  If that compiler is older than GCC 10, take `g++` from PATH (the
-# gcc-native module) when it is new enough.  An explicit -DCMAKE_CXX_COMPILER always wins.
+# CMake uses $CXX or else `c++`, which on some systems is an old system GCC without C++20.  If that compiler is older
+# than GCC 10, take `g++` from PATH when it is GCC 10 or newer.  An explicit -DCMAKE_CXX_COMPILER always wins.
 # Include this before project().
 if(NOT DEFINED CMAKE_CXX_COMPILER)
   set(_cxx "$ENV{CXX}")

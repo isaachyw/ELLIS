@@ -42,7 +42,7 @@ minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"   # persistent: rebuilds are incremental and Stim is fetched once
 wheel.packages = ["src/python/ellis"]
 cmake.build-type = "Release"
-# A login node gives a user 32 cores and 30 GB, and ninja would start one compiler per core.
+# ninja would start one compiler per core; a cap keeps memory bounded on machines with many cores.
 build.tool-args = ["-j8"]
 # The sdist keeps sources, tests and docs/sampling.md; README images load from GitHub.
 sdist.exclude = [".audit", ".github", ".pytest_cache", ".python-version", "docs/assets", "tools", "uv.lock"]

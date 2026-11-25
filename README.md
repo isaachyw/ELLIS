@@ -56,10 +56,8 @@ uv add ellis-qec             # or: pip install ellis-qec
 uv add "ellis-qec[sinter]"   # also sinter, for ellis.sinter
 ```
 
-The distribution is `ellis-qec` and the import name is `ellis`. It installs Stim and Clifft with it. Wheels are
-available for CPython 3.12, 3.13, and 3.14 on Linux x86-64 (manylinux_2_28) and macOS arm64 (macOS 15 or later, as
-for Clifft). An x86-64 wheel contains two builds of the C++ core, one for CPUs with AVX2 and one for CPUs without it.
-`import ellis` loads the faster build that the CPU runs, and `ellis._core.VARIANT` names it.
+Import it as `ellis`. Wheels support CPython 3.12, 3.13, and 3.14 on Linux x86-64 and macOS arm64 (macOS 15 or
+later).
 
 ### Build from source
 
@@ -68,13 +66,7 @@ uv sync                  # builds ellis._core with CMake (fetches Stim 1.16.0 on
 uv sync --extra sinter   # also sinter, for ellis.sinter
 ```
 
-The build needs a C++20 compiler: GCC 10 or newer, or Apple clang. A source build compiles one variant of the core,
-the best one for the machine that runs the build (AVX2, SSE2, or 64-bit words on arm64). To build both x86-64 wheel
-variants, run `uv sync -C cmake.define.ELLIS_SIMD="avx2;sse2"`, and then use `uv run --no-sync`, because a plain
-`uv run` rebuilds with the default settings. To build
-without network access, add `-C cmake.define.FETCHCONTENT_SOURCE_DIR_STIM=/path/to/Stim-1.16.0`. On Perlmutter,
-CMake selects the `gcc-native` module's `g++` automatically. On a shared cluster, run the first build and the tests on
-a compute node.
+The build needs a C++20 compiler: GCC 10 or newer, or Apple clang.
 
 ## Use
 
@@ -84,8 +76,8 @@ from ellis.noise import surface_memory
 
 circuit = surface_memory(d=5, rounds=5, p=1e-3, p_loss=1e-3)  # I_ERROR[loss](p) marks loss sites
 sampler = ellis.compile_sampler(circuit, seed=1)  # certifies: verdict "proven", method "frame-css"
-sampler.method                                    # "frame"
-r = sampler.sample(10**4)                         # r.measurements, r.detectors, r.observables, r.heralds
+sampler.method  # "frame"
+r = sampler.sample(10**4)  # r.measurements, r.detectors, r.observables, r.heralds
 r = sampler.sample(10**6, bit_packed=True, threads=8)  # the same fields, bit-packed, on 8 threads
 ```
 
@@ -127,7 +119,7 @@ uv run python tools/classify_lightstim.py --benchmark                  # paper A
 
 ## License
 
-Apache-2.0. ELLIS includes [Stim](https://github.com/quantumlib/Stim), which is also Apache-2.0.
+Apache-2.0.
 
 ## Citation
 
@@ -142,5 +134,22 @@ If you find ELLIS useful in your work, please cite our paper:
       archivePrefix={arXiv},
       primaryClass={quant-ph},
       url={https://arxiv.org/abs/2611.26173},
+}
+```
+
+For circuits without a proven common reference, such as circuits that are not frame-CSS, ELLIS samples with
+[Clifft](https://github.com/unitaryfoundation/clifft)'s non-computational sampler in online mode, adapted to ELLIS's
+loss and reload markers (`ellis._clifft`). If your results use that route (`sampler.method == "clifft"`), please also
+cite Clifft:
+
+```bibtex
+@misc{chase2026clifftfastexactsimulation,
+      title={Clifft: Fast Exact Simulation of Near-Clifford Quantum Circuits},
+      author={Bradley A. Chase and Farrokh Labib},
+      year={2026},
+      eprint={2604.27058},
+      archivePrefix={arXiv},
+      primaryClass={quant-ph},
+      url={https://arxiv.org/abs/2604.27058},
 }
 ```
