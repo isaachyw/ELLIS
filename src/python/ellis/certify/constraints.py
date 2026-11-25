@@ -98,29 +98,34 @@ def _pattern(slots):
 # ------------------------------------------------------------------ exact sign constraints
 def _noiseless(circuit: stim.Circuit) -> stim.Circuit:
     """Drop noise channels and measurement-flip probabilities (keeps inverted targets and MPAD)."""
-    out = stim.Circuit()
+    # Appending (name, targets_copy(), args) makes Stim probe every target with a throwing pybind11 cast, which is slow
+    # where C++ unwinding is (macOS).  Append the instruction itself, or its text, instead.
+    lines = []
     for inst in circuit.flattened():
         assert isinstance(inst, stim.CircuitInstruction)  # flattened: no REPEAT blocks
         gd = stim.gate_data(inst.name)
         if gd.is_noisy_gate and not gd.produces_measurements:
             continue
-        out.append(inst.name, inst.targets_copy(), [] if gd.produces_measurements else inst.gate_args_copy(), tag=inst.tag)
-    return out
+        if not gd.produces_measurements or not inst.gate_args_copy():
+            lines.append(str(inst))
+        else:
+            tag = f"[{inst.tag}]" if inst.tag else ""
+            lines.append(f"{inst.name}{tag} {str(inst).split(' ', 1)[1]}")
+    return stim.Circuit("\n".join(lines))
 
 
 def _one_target_per_measure_reset(circuit: stim.Circuit) -> stim.Circuit:
     """Stim 1.16's flow_generators reads `MR q q` (one instruction measuring and resetting q twice) as if both
     readouts came before one reset, reporting rec[0] xor rec[1] as deterministic; its simulator, correctly, makes
     the second readout deterministic instead.  A TICK between single-target measure-resets keeps them apart."""
-    out = stim.Circuit()
+    lines = []
     for inst in circuit:
         if inst.name.startswith("MR"):
-            for t in inst.targets_copy():
-                out.append("TICK")
-                out.append(inst.name, [t], inst.gate_args_copy(), tag=inst.tag)
+            head, *targets = str(inst).split(" ")
+            lines += [f"TICK\n{head} {t}" for t in targets]
         else:
-            out.append(inst)
-    return out
+            lines.append(str(inst))
+    return stim.Circuit("\n".join(lines))
 
 
 def constraints(circuit: stim.Circuit, losses):

@@ -52,11 +52,8 @@ def validate(circuit: stim.Circuit) -> None:
 def strip_loss(circuit: stim.Circuit) -> stim.Circuit:
     """Reference circuit: loss and reload markers removed and Pauli gates removed (they live in the frame
     instead, so that a Pauli on a lost qubit is masked like any other gate)."""
-    out = stim.Circuit()
-    for inst in circuit.flattened():
-        if not (is_loss(inst) or is_reload(inst)) and inst.name not in PAULI:
-            out.append(inst)
-    return out
+    return stim.Circuit("\n".join(str(inst) for inst in circuit.flattened()
+                                  if not (is_loss(inst) or is_reload(inst)) and inst.name not in PAULI))
 
 
 def explicit_lossy_circuit(circuit: stim.Circuit, losses) -> stim.Circuit:
@@ -65,32 +62,34 @@ def explicit_lossy_circuit(circuit: stim.Circuit, losses) -> stim.Circuit:
     Operations on lost qubits are removed; a lost readout becomes a fresh |+> ancilla measured
     in Z (uniform placeholder bit), so the measurement record keeps its layout.  A reload marker on an
     empty slot becomes `R q`."""
+    # Built as text and parsed once: Stim's Circuit.append(name, targets, args) is slow where C++ unwinding is (macOS).
     anc = circuit.num_qubits
-    out = stim.Circuit()
+    out: list[str] = []
     lost = set(losses.get(-1, ()))
     for k, inst in enumerate(circuit.flattened()):
         name, targets = inst.name, inst.targets_copy()
         qs = [t.value for t in targets]
+        args = inst.gate_args_copy()
+        head = name + (f"({','.join(map(repr, args))})" if args else "")
         if is_reload(inst):
             for q in qs:
                 if q in lost:
                     lost.discard(q)
-                    out.append("R", [q])
+                    out.append(f"R {q}")
         elif name in ANNOTATIONS or is_loss(inst):
             if name != "I_ERROR":
-                out.append(inst)
+                out.append(str(inst))
         elif name in MEAS:
-            for t in targets:
-                q = t.value
-                if q in lost:
-                    out.append("RX", [anc]); out.append("M", [anc])
+            for t, text in zip(targets, str(inst).split(" ")[1:]):
+                if t.value in lost:
+                    out.append(f"RX {anc}\nM {anc}")
                 else:
-                    out.append(name, [t], inst.gate_args_copy())     # keeps an inverted target `!q`
+                    out.append(f"{head} {text}")     # keeps an inverted target `!q`
         else:
             two = stim.gate_data(name).is_two_qubit_gate
             groups = list(zip(qs[::2], qs[1::2])) if two else [(q,) for q in qs]
             keep = [q for g in groups if not (set(g) & lost) for q in g]
             if keep:
-                out.append(name, keep, inst.gate_args_copy())
+                out.append(f"{head} {' '.join(map(str, keep))}")
         lost |= set(losses.get(k, ()))
-    return out
+    return stim.Circuit("\n".join(out))
