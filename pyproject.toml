@@ -1,6 +1,6 @@
 [project]
 name = "ellis-qec"
-version = "0.1.0"
+version = "0.1.1"
 description = "ELLIS: Efficient Loss and Leakage Invariant-reference Simulation. Exact masked Pauli-frame sampling of Clifford circuits with atom loss, and common-reference certificates."
 readme = "README.md"
 license = "Apache-2.0"
